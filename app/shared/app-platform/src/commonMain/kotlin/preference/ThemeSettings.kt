@@ -27,13 +27,19 @@ data class ThemeSettings(
     val useBlackBackground: Boolean = false,
     val alwaysDarkInEpisodePage: Boolean = false,
     val useDynamicSubjectPageTheme: Boolean = false,
-    val seedColorValue: ULong = 0xFF6750A4u,
+    val seedColorValue: ULong = DefaultSeedColor.value,
     val enableAnimatedGradientSubjectPage: Boolean = false,
     val enableFrostedGlassEffect: Boolean = false,
     @Suppress("PropertyName") @Transient val _placeholder: Int = 0,
 ) {
     @Transient
-    val seedColor: Color = Color(seedColorValue).let {
+    val seedColor: Color = runCatching {
+        if (seedColorValue > 0xFFFFFFFFu) {
+            Color(value = seedColorValue)
+        } else {
+            Color(color = seedColorValue.toLong())
+        }
+    }.getOrElse { DefaultSeedColor }.let {
         if (it == Color.Unspecified) DefaultSeedColor else it
     }
 

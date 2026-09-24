@@ -3,6 +3,7 @@ package app.yokan.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import dev.chrisbanes.haze.rememberHazeState
 import me.him188.ani.app.data.models.preference.DarkMode
 import me.him188.ani.app.data.models.preference.ThemeSettings
@@ -33,7 +34,7 @@ fun YokanTheme(
         useDynamicTheme = false,
         useBlackBackground = true,
         enableFrostedGlassEffect = true,
-        seedColorValue = 0xFF6750A4u,
+        seedColorValue = Color(0xFF6750A4).value,
     )
     val hazeState = rememberHazeState()
     val platformFont = rememberPlatformFontFamily(null)
