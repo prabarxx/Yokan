@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -30,8 +31,8 @@ import me.him188.ani.app.ui.foundation.AsyncImage
 import me.him188.ani.app.ui.foundation.layout.CarouselAutoAdvanceEffect
 import me.him188.ani.app.ui.foundation.layout.CarouselItem
 import me.him188.ani.app.ui.foundation.layout.CarouselItemDefaults
-import me.him188.ani.app.ui.foundation.layout.rememberMaskShape
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrendingCarousel(
     trendingList: List<AniListMedia>,
@@ -81,7 +82,6 @@ fun TrendingCarousel(
                             CarouselItemDefaults.Text(supporting, maxLines = 1)
                         }
                     },
-                    shape = rememberMaskShape(CarouselItemDefaults.shape),
                 ) {
                     Surface(
                         onClick = { onAnimeClick(anime) },

@@ -4,7 +4,6 @@ import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -96,7 +95,7 @@ fun VideoPlayerScreen(
     val controllerState = rememberVideoControllerState()
     val platformComponents = remember(context) { getComponentAccessorsImpl(context) }
     val audioController = remember(platformComponents) {
-        platformComponents.audioManager.asLevelController(StreamType.MUSIC)
+        platformComponents.audioManager?.asLevelController(StreamType.MUSIC) ?: NoOpLevelController
     }
     val brightnessController = remember(platformComponents) {
         platformComponents.brightnessManager?.asLevelController() ?: NoOpLevelController
@@ -139,7 +138,7 @@ fun VideoPlayerScreen(
             video = {
                 VideoPlayer(
                     player = player,
-                    modifier = Modifier.matchParentSize(),
+                    modifier = Modifier.fillMaxSize(),
                 )
             },
             gestureHost = {
