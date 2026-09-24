@@ -1,0 +1,431 @@
+/*
+ * Copyright (C) 2024-2026 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/ani/blob/main/LICENSE
+ */
+
+package me.him188.ani.app.ui.mediaselect.selector
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import me.him188.ani.app.domain.mediasource.instance.MediaSourceInstance
+import me.him188.ani.app.domain.mediasource.web.SolveRequest
+import me.him188.ani.app.ui.foundation.IconButton
+import me.him188.ani.app.ui.foundation.ProvideCompositionLocalsForPreview
+import me.him188.ani.app.ui.foundation.ifThen
+import me.him188.ani.app.ui.lang.Lang
+import me.him188.ani.app.ui.lang.media_selector_web_captcha_unsupported
+import me.him188.ani.app.ui.lang.media_selector_web_edit_query_action
+import me.him188.ani.app.ui.lang.media_selector_web_edit_query_prompt
+import me.him188.ani.app.ui.lang.media_selector_web_rate_limited
+import me.him188.ani.app.ui.lang.media_selector_web_waiting_captcha
+import me.him188.ani.app.ui.lang.settings_mediasource_refresh
+import me.him188.ani.app.ui.mediaselect.common.SourceIcon
+import me.him188.ani.datasources.api.Media
+import me.him188.ani.utils.platform.annotations.TestOnly
+import me.him188.ani.utils.platform.currentTimeMillis
+import org.jetbrains.compose.resources.stringResource
+
+
+data class WebSourceChannel(
+    val name: String,
+    val original: Media? = null,
+)
+
+data class WebSource(
+    /**
+     * @see MediaSourceInstance.instanceId
+     */
+    val instanceId: String,
+    val mediaSourceId: String,
+    val iconUrl: String,
+//    val iconResourceId: String?,
+    val name: String,
+    val channels: List<WebSourceChannel>,
+    val isLoading: Boolean,
+    val isError: Boolean,
+    val isPreferred: Boolean,
+    val captchaRequest: SolveRequest? = null,
+    val captchaMessage: String? = null,
+    val isResolvingCaptcha: Boolean = false,
+    /** 限流中: 到达该时间 (epoch millis) 后会自动重试. */
+    val rateLimitedUntilMillis: Long? = null,
+    /** 当前平台是否支持交互解决验证码 (iOS 为 false, 显示降级提示). */
+    val isCaptchaSupported: Boolean = true,
+) {
+    val isCaptchaRequired: Boolean get() = captchaRequest != null
+    val isRateLimited: Boolean get() = rateLimitedUntilMillis != null
+}
+
+/**
+ * https://www.figma.com/design/LET1n9mmDa6npDTIlUuJjU/Animeko?node-id=1054-13751&t=OSgRmNiOHpUGBYYu-0
+ */
+@Composable
+fun MediaSelectorWebSourcesColumn(
+    list: List<WebSource>,
+    selectedSource: () -> WebSource?,
+    selectedChannel: () -> WebSourceChannel?,
+    onSelect: (WebSource, WebSourceChannel) -> Unit,
+    onRefresh: (WebSource) -> Unit,
+    onResolveCaptcha: (WebSource) -> Unit,
+    onRequestQueryEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+    preferredSourceContainerColor: Color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.33f)
+) {
+    val editQueryPromptText = stringResource(Lang.media_selector_web_edit_query_prompt)
+    val editQueryActionText = stringResource(Lang.media_selector_web_edit_query_action)
+    val card = @Composable { source: WebSource ->
+        WebSourceCard(
+            source,
+            selectedChannel = { if (selectedSource() == source) selectedChannel() else null },
+            onSelect = {
+                onSelect(source, it)
+            },
+            onRefresh = {
+                onRefresh(source)
+            },
+            onResolveCaptcha = {
+                onResolveCaptcha(source)
+            },
+            Modifier
+                .fillMaxWidth()
+                .ifThen(source.isPreferred) {
+                    background(preferredSourceContainerColor)
+                },
+        )
+    }
+//    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+//        items(list, key = { it.instanceId }) { source ->
+//            card(source)
+//        }
+//    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // not scrollable. 否则会跟 bottom sheet 的 scroll 冲突. 
+        list.forEach { source ->
+            card(source)
+        }
+
+        TextButton(
+            onRequestQueryEdit,
+            Modifier
+                .align(Alignment.CenterHorizontally),
+        ) {
+            Text(
+                buildAnnotatedString {
+                    append(editQueryPromptText)
+                    pushStyle(
+                        SpanStyle(
+                            textDecoration = TextDecoration.Underline,
+                        ),
+                    )
+                    append(editQueryActionText)
+                },
+                color = MaterialTheme.colorScheme.outline,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebSourceCard(
+    source: WebSource,
+    selectedChannel: () -> WebSourceChannel?,
+    onSelect: (WebSourceChannel) -> Unit,
+    onRefresh: () -> Unit,
+    onResolveCaptcha: () -> Unit,
+    modifier: Modifier = Modifier,
+
+    ) {
+    val minHeight = 48.dp
+    val waitingCaptchaText = stringResource(Lang.media_selector_web_waiting_captcha)
+    val captchaUnsupportedText = stringResource(Lang.media_selector_web_captcha_unsupported)
+    val refreshText = stringResource(Lang.settings_mediasource_refresh)
+    Row(
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(
+            Modifier.heightIn(min = minHeight),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SourceIcon(
+                source.iconUrl, source.name,
+                Modifier.size(24.dp),
+            )
+            Box(Modifier.padding(start = 8.dp)) {
+                Text(
+                    source.name,
+                    Modifier.alpha(0f).width(IntrinsicSize.Max),
+                    softWrap = true,
+                    maxLines = 2,
+                )
+                Text(
+                    source.name,
+                    Modifier.matchParentSize(),
+                    softWrap = true,
+                    maxLines = 2,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+        }
+
+        FlowRow(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy((-8).dp),
+        ) {
+            if (source.isCaptchaRequired) {
+                if (source.isCaptchaSupported) {
+                    Text(
+                        text = if (source.isResolvingCaptcha) waitingCaptchaText else source.captchaMessage.orEmpty(),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clickable(enabled = !source.isResolvingCaptcha) {
+                                onResolveCaptcha()
+                            }
+                            .padding(vertical = 8.dp),
+                    )
+                } else {
+                    // iOS 等无浏览器平台: 提示降级, 不可点击
+                    Text(
+                        text = captchaUnsupportedText,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .padding(vertical = 8.dp),
+                    )
+                }
+            }
+
+            source.rateLimitedUntilMillis?.let { until ->
+                RateLimitedCountdownText(until)
+            }
+
+            for (channel in source.channels) {
+                InputChip(
+                    selected = channel == selectedChannel(),
+                    onClick = { onSelect(channel) },
+                    label = { Text(channel.name) },
+                )
+            }
+
+            if (source.isLoading) {
+                Box(
+                    Modifier.minimumInteractiveComponentSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+
+            if (source.isError) {
+                Box(
+                    Modifier.minimumInteractiveComponentSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.Close, null,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+
+        if (source.isError) {
+            IconButton(onRefresh) {
+                Icon(Icons.Rounded.Refresh, refreshText)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RateLimitedCountdownText(untilMillis: Long, modifier: Modifier = Modifier) {
+    val remainingSeconds by produceState(
+        initialValue = remainingSecondsUntil(untilMillis),
+        key1 = untilMillis,
+    ) {
+        while (true) {
+            value = remainingSecondsUntil(untilMillis)
+            if (value <= 0L) break
+            delay(1000)
+        }
+    }
+    Text(
+        text = stringResource(Lang.media_selector_web_rate_limited, remainingSeconds),
+        color = MaterialTheme.colorScheme.tertiary,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .padding(vertical = 8.dp),
+    )
+}
+
+private fun remainingSecondsUntil(untilMillis: Long): Long =
+    ((untilMillis - currentTimeMillis()) / 1000).coerceAtLeast(0)
+
+@OptIn(TestOnly::class)
+@Composable
+@Preview
+private fun PreviewMediaSelectorWebColumn() {
+    ProvideCompositionLocalsForPreview {
+        Surface {
+            MediaSelectorWebSourcesColumn(
+                TestWebSources,
+                selectedSource = { TestWebSources[0] },
+                selectedChannel = { TestWebSources[0].channels[1] },
+                onSelect = { _, _ -> },
+                onRefresh = {},
+                onResolveCaptcha = {},
+                onRequestQueryEdit = {},
+            )
+        }
+    }
+}
+
+@OptIn(TestOnly::class)
+@Composable
+@Preview
+private fun PreviewMediaSelectorWebColumn3() {
+    ProvideCompositionLocalsForPreview {
+        Surface {
+            MediaSelectorWebSourcesColumn(
+                TestWebSources.take(3),
+                selectedSource = { TestWebSources[0] },
+                selectedChannel = { TestWebSources[0].channels[1] },
+                onSelect = { _, _ -> },
+                onRefresh = {},
+                onResolveCaptcha = {},
+                onRequestQueryEdit = {},
+            )
+        }
+    }
+}
+
+@OptIn(TestOnly::class)
+@Composable
+@Preview
+private fun PreviewWebSourceCard() {
+    ProvideCompositionLocalsForPreview {
+        Surface {
+            WebSourceCard(
+                TestWebSources[0],
+                selectedChannel = { TestWebSourceChannels2[0] },
+                onSelect = {},
+                onRefresh = {},
+                onResolveCaptcha = {},
+            )
+        }
+    }
+}
+
+
+@TestOnly
+internal val TestWebSources
+    get() = (0..10).mapTo(mutableListOf()) {
+        WebSource(
+            instanceId = "source$it",
+            mediaSourceId = "source$it",
+            iconUrl = "https://example.com/example.png",
+            name = "数据源 $it",
+            channels = if (it % 2 == 0) {
+                TestWebSourceChannels1
+            } else {
+                TestWebSourceChannels2
+            },
+            isError = it % 4 == 0,
+            isLoading = it % 4 == 3,
+            isPreferred = false,
+        )
+    }.apply {
+        add(
+            1,
+            WebSource(
+                instanceId = "source none",
+                mediaSourceId = "source none",
+                iconUrl = "https://example.com/example.png",
+                name = "初始",
+                channels = emptyList(),
+                isError = false,
+                isLoading = true,
+                isPreferred = true,
+            ),
+        )
+        add(
+            1,
+            WebSource(
+                instanceId = "source error",
+                mediaSourceId = "source error",
+                iconUrl = "https://example.com/example.png",
+                name = "查询错误的数据源",
+                channels = emptyList(),
+                isError = true,
+                isLoading = false,
+                isPreferred = false,
+            ),
+        )
+    }
+
+@TestOnly
+private val TestWebSourceChannels1
+    get() = listOf(
+        WebSourceChannel(name = "线路1"),
+        WebSourceChannel(name = "线路2"),
+        WebSourceChannel(name = "线路3"),
+        WebSourceChannel(name = "线路4"),
+        WebSourceChannel(name = "线路5"),
+    )
+
+@TestOnly
+private val TestWebSourceChannels2
+    get() = listOf(
+        WebSourceChannel(name = "主线"),
+        WebSourceChannel(name = "备线"),
+    )

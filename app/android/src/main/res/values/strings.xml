@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Yokan</string>
+    <string name="service_torrent_engine_description">Servicio de streaming y descarga de torrents en segundo plano</string>
+</resources>

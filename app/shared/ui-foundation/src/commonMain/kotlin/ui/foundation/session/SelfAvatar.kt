@@ -1,0 +1,196 @@
+/*
+ * Copyright (C) 2024-2025 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/ani/blob/main/LICENSE
+ */
+
+package me.him188.ani.app.ui.foundation.session
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.DpSize
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import me.him188.ani.app.data.repository.user.UserRepository
+import me.him188.ani.app.navigation.AniNavigator
+import me.him188.ani.app.navigation.LocalNavigator
+import me.him188.ani.app.tools.rememberUiMonoTasker
+import me.him188.ani.app.ui.external.placeholder.placeholder
+import me.him188.ani.app.ui.foundation.avatar.AvatarImage
+import me.him188.ani.app.ui.lang.Lang
+import me.him188.ani.app.ui.lang.login_sign_in
+import me.him188.ani.app.ui.lang.playback_history_title
+import me.him188.ani.app.ui.lang.settings_account_confirm_logout
+import me.him188.ani.app.ui.lang.settings_account_logout
+import me.him188.ani.app.ui.lang.settings_account_settings
+import me.him188.ani.app.ui.lang.subject_collection_cancel
+import me.him188.ani.app.ui.user.SelfInfoUiState
+import org.jetbrains.compose.resources.stringResource
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
+import kotlin.coroutines.CoroutineContext
+
+@Composable
+fun SelfAvatar(
+    state: SelfInfoUiState,
+    size: DpSize, // = DpSize(48.dp, 48.dp)
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val signInText = stringResource(Lang.login_sign_in)
+
+    @Composable
+    fun Content(onClick: () -> Unit) {
+        if (state.isLoading) {
+            // 加载中时展示 placeholder
+            AvatarImage(
+                url = state.selfInfo?.avatarUrl,
+                Modifier.size(size).clip(CircleShape).placeholder(state.selfInfo == null),
+            )
+        } else {
+            if (state.isSessionValid == false || state.selfInfo == null) {
+                TextButton(onClick) {
+                    Text(signInText)
+                }
+            } else {
+                AvatarImage(
+                    url = state.selfInfo.avatarUrl,
+                    modifier = Modifier.size(size).clip(CircleShape),
+                )
+            }
+        }
+    }
+    Box {
+        if (onClick != null) {
+            Surface(onClick, modifier, shape = CircleShape) {
+                Content(onClick)
+            }
+        } else {
+            Surface(modifier = modifier, shape = CircleShape) {
+                Content { }
+            }
+        }
+    }
+}
+
+@Stable
+interface SelfAvatarActionHandler {
+    fun onClickPlaybackHistory()
+    fun onClickSettings()
+    suspend fun onLogout()
+}
+
+private class DefaultSelfAvatarActionHandler(
+    private val navigator: AniNavigator,
+    private val dispatcher: CoroutineContext = Dispatchers.Default,
+) : SelfAvatarActionHandler, KoinComponent {
+    private val userRepo: UserRepository by inject()
+    override fun onClickPlaybackHistory() {
+        navigator.navigatePlaybackHistory()
+    }
+
+    override fun onClickSettings() {
+        navigator.navigateSettings()
+    }
+
+    override suspend fun onLogout() {
+        withContext(dispatcher) {
+            userRepo.clearSelfInfo()
+        }
+    }
+}
+
+@Composable
+fun rememberSelfAvatarActionHandler(): SelfAvatarActionHandler {
+    val navigator = LocalNavigator.current
+    return remember(navigator) { DefaultSelfAvatarActionHandler(navigator) }
+}
+
+@Composable
+private fun SelfAvatarMenus(
+    handler: SelfAvatarActionHandler,
+    onClickAny: () -> Unit,
+) {
+    val playbackHistoryText = stringResource(Lang.playback_history_title)
+    val settingsText = stringResource(Lang.settings_account_settings)
+    val logoutText = stringResource(Lang.settings_account_logout)
+    val confirmLogoutText = stringResource(Lang.settings_account_confirm_logout)
+    val cancelText = stringResource(Lang.subject_collection_cancel)
+
+    DropdownMenuItem(
+        text = { Text(playbackHistoryText) },
+        onClick = {
+            handler.onClickPlaybackHistory()
+            onClickAny()
+        },
+        leadingIcon = { Icon(Icons.Rounded.History, null) },
+    )
+
+    DropdownMenuItem(
+        text = { Text(settingsText) },
+        onClick = {
+            handler.onClickSettings()
+            onClickAny()
+        },
+        leadingIcon = { Icon(Icons.Rounded.Settings, null) },
+    )
+
+    val logoutTasker = rememberUiMonoTasker()
+    var showLogoutConfirmation by rememberSaveable { mutableStateOf(false) }
+    val running by logoutTasker.isRunning.collectAsStateWithLifecycle()
+    DropdownMenuItem(
+        text = { Text(logoutText, color = MaterialTheme.colorScheme.error) },
+        leadingIcon = { Icon(Icons.AutoMirrored.Rounded.Logout, null) },
+        onClick = { showLogoutConfirmation = true },
+        enabled = !running,
+    )
+    if (showLogoutConfirmation) {
+        AlertDialog(
+            { showLogoutConfirmation = false },
+            text = { Text(confirmLogoutText) },
+            confirmButton = {
+                TextButton(
+                    {
+                        logoutTasker.launch {
+                            handler.onLogout()
+                            onClickAny()
+                        }
+                        showLogoutConfirmation = false
+                    },
+                ) {
+                    Text(logoutText, color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton({ showLogoutConfirmation = false }) {
+                    Text(cancelText)
+                }
+            },
+        )
+    }
+}

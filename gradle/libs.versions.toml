@@ -1,0 +1,351 @@
+[versions]
+kotlin = "2.4.10"
+android-gradle-plugin = "9.1.1"
+
+### KOTLINX ###
+kotlinx-coroutines = "1.11.0" # https://github.com/Kotlin/kotlinx.coroutines/releases
+kotlinx-serialization = "1.11.0" # https://github.com/Kotlin/kotlinx.serialization/releases
+kotlinx-datetime = "0.7.1" # https://github.com/Kotlin/kotlinx-datetime/releases
+kotlinx-atomicfu = "0.33.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
+kotlinx-io = "0.8.2" # https://github.com/Kotlin/kotlinx-io/releases
+kotlinx-collections-immutable = "0.4.0" # https://github.com/Kotlin/kotlinx.collections.immutable/releases
+
+### ANDROIDX ###
+androidx-annotation = "1.9.1"
+androidx-media3 = "1.9.0" # https://developer.android.com/jetpack/androidx/releases/media3
+androidx-lifecycle = "2.11.0-beta01" # https://developer.android.com/jetpack/androidx/releases/lifecycle
+paging = "3.4.1" # https://developer.android.com/jetpack/androidx/releases/paging
+datastore = "1.2.0" # https://developer.android.com/jetpack/androidx/releases/datastore
+ksp = "2.3.10" # https://github.com/google/ksp/releases
+# note: room 2.7.0-rc01 cannot compile
+room = "2.8.4" # https://developer.android.com/jetpack/androidx/releases/room#declaring_dependencies
+s3 = "2.42.14"
+sentry-kotlin-multiplatform = "0.11.0"
+sqlite = "2.6.1"
+androidx-activity = "1.12.4"
+androidx-core = "1.17.0"
+stability-analyzer = "0.12.0"
+google-gms-google-services = "4.4.2"
+mannodermaus-android-junit5 = "1.11.2.0"
+undercouch-download = "5.6.0"
+
+### COMPOSE ###
+# How to upgrade them? Check compose multiplatform release notes and find the corresponding versions for each library.
+
+# https://github.com/JetBrains/compose-multiplatform/releases
+compose-multiplatform = "1.11.1"
+compose-hot-reload = "1.2.0" # https://github.com/JetBrains/compose-hot-reload/releases
+
+# JetBrains compose libraries. Follow the release notes for main Compose Multiplatform for versoins.
+compose-lifecycle = "2.11.0-beta01"
+compose-navigation = "2.9.2"
+# Navigation 3. navigation3-runtime 由 Google 直接发布 KMP 构件, 只有 UI 部分是 JetBrains 移植的.
+compose-navigation3-ui = "1.1.1"
+androidx-navigation3-runtime = "1.1.1"
+compose-material = "1.7.3"
+compose-material3 = "1.11.0-alpha07"
+compose-material3-adaptive = "1.3.0-alpha07"
+compose-window-core = "1.5.1" # used dynamically, don't remove
+
+# Jetpack Compose libraries. Use the exact version mentioned from Compose Multiplatfrom release notes.
+# https://developer.android.com/jetpack/androidx/releases/compose-material3
+jetpack-compose-material3 = "1.5.0-alpha17"
+jetpack-compose = "1.11.2"
+androidx-compose-material3-adaptive = "1.3.0-alpha10"
+
+### OTHERS ###
+
+bytebuddy = "1.17.4" # https://github.com/raphw/byte-buddy/releases
+jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
+dbus-java = "5.2.0"
+jsonpathkt-kotlinx = "3.0.2"
+ksoup = "0.2.2"
+filekit = "0.13.0" # https://github.com/vinceglb/FileKit/releases
+kotlinpoet = "1.18.1" # https://github.com/square/kotlinpoet/releases
+log4j-core = "2.20.0"
+ktor = "3.1.1" # https://github.com/ktorio/ktor/releases
+koin = "3.5.6" # https://github.com/InsertKoinIO/koin/releases
+slf4j = "2.0.16"
+jsoup = "1.18.1" # https://github.com/jhy/jsoup/releases
+snakeyaml = "2.2"
+sketch = "4.6.0" # https://github.com/panpf/sketch/releases
+constraintlayout-compose = "0.6.1"
+antlr-kotlin = "1.0.2"
+diamondedge-logging = "2.0.3" # Only for native. On JVM we use slf4j directly.
+ipaddress-parser = "5.5.1"
+turbine = "1.2.0" # https://github.com/cashapp/turbine/releases/
+junit4 = "4.13.2"
+junit5 = "5.11.4"
+mannodermaus-junit5 = "1.6.0" # https://github.com/mannodermaus/android-junit5
+stately-common = "2.0.7"
+jsystemthemedetector = "3.9"
+materialkolor = "2.0.2"
+mockito = "5.12.0"
+mockito-kotlin = "5.4.0"
+sentry-kmp = "0.12.0" # used in plugins, don't remove # https://mvnrepository.com/artifact/io.sentry/sentry-kotlin-multiplatform-gradle-plugin
+sentry-compose-android = "8.23.0" # https://docs.sentry.io/platforms/android/integrations/jetpack-compose/
+gitlive-firebase = "2.3.0"
+google-firebase = "22.0.1"
+posthog-android = "3.11.3"
+posthog-java = "1.2.0"
+onnxruntime = "1.22.0"
+openapi-generator = "7.13.0"
+mediamp = "0.3.2"
+libass-android = "0.5.0-beta01"
+compose-native-tray = "1.3.0"
+kmpalette = "4.0.0-beta02"
+haze = "1.7.2"
+aboutlibraries = "15.0.4" # https://github.com/mikepenz/AboutLibraries/releases
+
+[plugins]
+# Plugins for projects.
+# 这里的别名必须带版本: build-logic 是 included build, 不会像 buildSrc 那样泄漏 classpath.
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "android-gradle-plugin" }
+android-application = { id = "com.android.application", version.ref = "android-gradle-plugin" }
+android-library = { id = "com.android.library", version.ref = "android-gradle-plugin" }
+kotlinx-atomicfu = { id = "org.jetbrains.kotlinx.atomicfu", version.ref = "kotlinx-atomicfu" }
+jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
+kotlin-plugin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-native-cocoapods = { id = "org.jetbrains.kotlin.native.cocoapods", version.ref = "kotlin" }
+# 上面规则的唯一例外: parcelize 由 KGP 自带, 带版本会报 "already on the classpath", 故用完整 id 且不带版本.
+kotlin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize" }
+
+kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+google-gms-google-services = { id = "com.google.gms.google-services", version.ref = "google-gms-google-services" }
+google-devtools-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+androidx-room = { id = "androidx.room", version.ref = "room" }
+antlr-kotlin = { id = "com.strumenta.antlr-kotlin", version.ref = "antlr-kotlin" }
+mannodermaus-android-junit5 = { id = "de.mannodermaus.android-junit5", version.ref = "mannodermaus-android-junit5" }
+sentry-kotlin-multiplatform = { id = "io.sentry.kotlin.multiplatform.gradle", version.ref = "sentry-kmp" }
+undercouch-download = { id = "de.undercouch.download", version.ref = "undercouch-download" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapi-generator" }
+compose-stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version.ref = "stability-analyzer" }
+aboutlibraries = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutlibraries" }
+
+[libraries]
+# Plugin libraries for build-logic.
+android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref = "android-gradle-plugin" }
+android-kotlin-multiplatform-library-gradle-plugin = { module = "com.android.kotlin.multiplatform.library:com.android.kotlin.multiplatform.library.gradle.plugin", version.ref = "android-gradle-plugin" }
+android-application-gradle-plugin = { module = "com.android.application:com.android.application.gradle.plugin", version.ref = "android-gradle-plugin" }
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+atomicfu-gradle-plugin = { module = "org.jetbrains.kotlinx:atomicfu-gradle-plugin", version.ref = "kotlinx-atomicfu" }
+compose-multiplatfrom-gradle-plugin = { module = "org.jetbrains.compose:org.jetbrains.compose.gradle.plugin", version.ref = "compose-multiplatform" }
+kotlin-compose-compiler-gradle-plugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+kotlin-native-cocoapods-gradle-plugin = { module = "org.jetbrains.kotlin.native.cocoapods:org.jetbrains.kotlin.native.cocoapods.gradle.plugin", version.ref = "kotlin" }
+# plugin marker artifact: 约定插件要 id(...) 它们, 就得让它们出现在编译类路径上.
+mannodermaus-android-junit5-gradle-plugin = { module = "de.mannodermaus.android-junit5:de.mannodermaus.android-junit5.gradle.plugin", version.ref = "mannodermaus-android-junit5" }
+compose-stability-analyzer-gradle-plugin = { module = "com.github.skydoves.compose.stability.analyzer:com.github.skydoves.compose.stability.analyzer.gradle.plugin", version.ref = "stability-analyzer" }
+
+# JUnit
+# These are used dynamically
+junit5-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit5" }
+junit5-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit5" }
+junit5-jupiter-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit5" }
+junit5-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "junit5" }
+junit5-android-test-core = { module = "de.mannodermaus.junit5:android-test-core", version.ref = "mannodermaus-junit5" }
+junit5-android-test-runner = { module = "de.mannodermaus.junit5:android-test-runner", version.ref = "mannodermaus-junit5" }
+junit4 = { module = "junit:junit", version.ref = "junit4" }
+
+# Kotlinx
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
+kotlinx-io-bytestring = { module = "org.jetbrains.kotlinx:kotlinx-io-bytestring", version.ref = "kotlinx-io" }
+kotlinx-io-okio = { module = "org.jetbrains.kotlinx:kotlinx-io-okio", version.ref = "kotlinx-io" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-debug = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-debug", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "kotlinx-serialization" }
+kotlinx-serialization-json-io = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json-io", version.ref = "kotlinx-serialization" }
+kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "kotlinx-collections-immutable" }
+atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "kotlinx-atomicfu" }
+
+# Ktor
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" }
+ktor-client-auth = { module = "io.ktor:ktor-client-auth", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
+
+# Koin
+koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
+koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
+koin-test = { module = "io.insert-koin:koin-test", version.ref = "koin" }
+
+# Logging
+log4j-core = { module = "org.apache.logging.log4j:log4j-core", version.ref = "log4j-core" }
+log4j-slf4j-impl = { module = "org.apache.logging.log4j:log4j-slf4j2-impl", version.ref = "log4j-core" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+logback-android = { module = "com.github.tony19:logback-android", version = "3.0.0" }
+
+# Sketch
+# https://github.com/panpf/sketch
+sketch-compose-core = { module = "io.github.panpf.sketch4:sketch-compose-core", version.ref = "sketch" }
+sketch-http-core = { module = "io.github.panpf.sketch4:sketch-http-core", version.ref = "sketch" }
+sketch-svg = { module = "io.github.panpf.sketch4:sketch-svg", version.ref = "sketch" }
+
+# Android Datastore
+datastore = { module = "androidx.datastore:datastore", version.ref = "datastore" }
+datastore-core = { module = "androidx.datastore:datastore-core", version.ref = "datastore" }
+datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+datastore-preferences-core = { module = "androidx.datastore:datastore-preferences-core", version.ref = "datastore" }
+
+# Room, SQLite, and Paging
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-paging = { group = "androidx.room", name = "room-paging", version.ref = "room" }
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-common = { group = "androidx.room", name = "room-common", version.ref = "room" }
+sqlite = { module = "androidx.sqlite:sqlite", version.ref = "sqlite" }
+sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
+sqlite-bundled-jvm = { module = "androidx.sqlite:sqlite-bundled-jvm", version.ref = "sqlite" }
+paging-common = { module = "androidx.paging:paging-common", version.ref = "paging" }
+paging-compose-android = { module = "androidx.paging:paging-compose", version.ref = "paging" }
+
+# JetBrains Compose Multiplatform
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+compose-animation = { module = "org.jetbrains.compose.animation:animation", version.ref = "compose-multiplatform" }
+compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-multiplatform" }
+compose-ui-util = { module = "org.jetbrains.compose.ui:ui-util", version.ref = "compose-multiplatform" }
+compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose-multiplatform" }
+compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose-multiplatform" }
+compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose-multiplatform" } # used in configureComposePreviewToolingDependency
+compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-multiplatform" }
+compose-ui-graphics-desktop = { module = "org.jetbrains.compose.ui:ui-graphics-desktop", version.ref = "compose-multiplatform" }
+compose-material = { module = "org.jetbrains.compose.material:material", version.ref = "compose-multiplatform" }
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
+compose-lifecycle-runtime = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime", version.ref = "compose-lifecycle" }
+compose-lifecycle-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "compose-lifecycle" }
+compose-lifecycle-viewmodel = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel", version.ref = "compose-lifecycle" }
+compose-lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "compose-lifecycle" }
+compose-navigation-compose = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "compose-navigation" }
+compose-navigation-runtime = { module = "org.jetbrains.androidx.navigation:navigation-runtime", version.ref = "compose-navigation" }
+compose-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "androidx-navigation3-runtime" }
+compose-navigation3-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "compose-navigation3-ui" }
+compose-lifecycle-viewmodel-navigation3 = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "compose-lifecycle" }
+compose-window-core = { module = "org.jetbrains.androidx.window:window-core", version.ref = "compose-window-core" }
+compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "compose-material" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-material3" }
+compose-material3-adaptive-core = { module = "org.jetbrains.compose.material3.adaptive:adaptive", version.ref = "compose-material3-adaptive" }
+compose-material3-adaptive-layout = { module = "org.jetbrains.compose.material3.adaptive:adaptive-layout", version.ref = "compose-material3-adaptive" }
+compose-material3-adaptive-navigation0 = { module = "org.jetbrains.compose.material3.adaptive:adaptive-navigation", version.ref = "compose-material3-adaptive" }
+compose-material3-adaptive-navigation-suite = { module = "org.jetbrains.compose.material3:material3-adaptive-navigation-suite", version.ref = "compose-material3" }
+compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose-multiplatform" }
+
+# Jetpack Compose
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidx-annotation" }
+androidx-compose-material3-adaptive = { module = "androidx.compose.material3.adaptive:adaptive", version.ref = "androidx-compose-material3-adaptive" }
+androidx-compose-material3-adaptive-layout = { module = "androidx.compose.material3.adaptive:adaptive-layout", version.ref = "androidx-compose-material3-adaptive" }
+androidx-compose-material3-adaptive-navigation = { module = "androidx.compose.material3.adaptive:adaptive-navigation", version.ref = "androidx-compose-material3-adaptive" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version.ref = "jetpack-compose" }
+
+# Androidx
+# Each library has its own version, so we don't use `Versions` here.
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+androidx-activity-ktx = { module = "androidx.activity:activity-ktx", version.ref = "androidx-activity" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version = "1.7.0" }
+androidx-material = { module = "com.google.android.material:material", version = "1.12.0" }
+#androidx-material3-window-size-class0 = { module = "androidx.compose.material3:material3-window-size-class", version = "1.2.1" }
+androidx-browser = { module = "androidx.browser:browser", version = "1.8.0" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
+onnxruntime = { module = "com.microsoft.onnxruntime:onnxruntime", version.ref = "onnxruntime" }
+androidx-media = { module = "androidx.media:media", version = "1.7.0" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-service = { module = "androidx.lifecycle:lifecycle-service", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-runtime-testing = { module = "androidx.lifecycle:lifecycle-runtime-testing", version.ref = "androidx-lifecycle" }
+androidx-collection = { module = "androidx.collection:collection", version = "1.4.5" }
+# Used dynamically, don't remove.
+androidx-test-runner = { module = "androidx.test:runner", version = "1.5.0" }
+
+# Android unit test
+mockito = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockito-kotlin" }
+
+# Media3 (ExoPlayer)
+androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "androidx-media3" }
+androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "androidx-media3" }
+androidx-media3-effect = { module = "androidx.media3:media3-effect", version.ref = "androidx-media3" }
+androidx-media3-exoplayer-dash = { module = "androidx.media3:media3-exoplayer-dash", version.ref = "androidx-media3" }
+androidx-media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "androidx-media3" }
+
+# mediamp
+mediamp-api = { module = "org.openani.mediamp:mediamp-api", version.ref = "mediamp" }
+mediamp-avkit = { module = "org.openani.mediamp:mediamp-avkit", version.ref = "mediamp" }
+mediamp-exoplayer = { module = "org.openani.mediamp:mediamp-exoplayer", version.ref = "mediamp" }
+mediamp-ffmpeg = { module = "org.openani.mediamp:mediamp-ffmpeg", version.ref = "mediamp" }
+mediamp-ffmpeg-desktop = { module = "org.openani.mediamp:mediamp-ffmpeg-desktop", version.ref = "mediamp" }
+mediamp-ffmpeg-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-ffmpeg-runtime-windows-x64", version.ref = "mediamp" }
+mediamp-ffmpeg-runtime-windows-arm64 = { module = "org.openani.mediamp:mediamp-ffmpeg-runtime-windows-arm64", version.ref = "mediamp" }
+mediamp-ffmpeg-runtime-linux-x64 = { module = "org.openani.mediamp:mediamp-ffmpeg-runtime-linux-x64", version.ref = "mediamp" }
+mediamp-ffmpeg-runtime-macos-x64 = { module = "org.openani.mediamp:mediamp-ffmpeg-runtime-macos-x64", version.ref = "mediamp" }
+mediamp-ffmpeg-runtime-macos-arm64 = { module = "org.openani.mediamp:mediamp-ffmpeg-runtime-macos-arm64", version.ref = "mediamp" }
+mediamp-ffmpeg-runtime-ios-xcframework = { module = "org.openani.mediamp:mediamp-ffmpeg-runtime-ios-xcframework", version.ref = "mediamp" }
+# Apple runtime is published as a @zip XCFramework and is resolved explicitly where needed.
+mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "mediamp" }
+mediamp-mpv-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-x64", version.ref = "mediamp" }
+mediamp-mpv-runtime-windows-arm64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-arm64", version.ref = "mediamp" }
+mediamp-mpv-runtime-linux-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-linux-x64", version.ref = "mediamp" }
+mediamp-mpv-runtime-macos-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-macos-x64", version.ref = "mediamp" }
+mediamp-mpv-runtime-macos-arm64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-macos-arm64", version.ref = "mediamp" }
+mediamp-source-ktxio = { module = "org.openani.mediamp:mediamp-source-ktxio", version.ref = "mediamp" }
+mediamp-test = { module = "org.openani.mediamp:mediamp-test", version.ref = "mediamp" }
+libass-media = { module = "io.github.peerless2012:ass-media", version.ref = "libass-android" }
+
+### All other libraries ###
+
+kotlinpoet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinpoet" }
+jetbrains-annotations = { module = "org.jetbrains:annotations", version = "23.0.0" }
+directories = { module = "dev.dirs:directories", version = "26" }
+snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
+antlr-kotlin-runtime = { module = "com.strumenta:antlr-kotlin-runtime", version.ref = "antlr-kotlin" }
+ipaddress-parser = { module = "com.github.seancfoley:ipaddress", version.ref = "ipaddress-parser" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbus-java" }
+dbus-java-transport-native-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbus-java" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+ksoup = { module = "com.fleeksoft.ksoup:ksoup", version.ref = "ksoup" }
+ksoup-kotlinx = { module = "com.fleeksoft.ksoup:ksoup-kotlinx", version.ref = "ksoup" }
+ksoup-network = { module = "com.fleeksoft.ksoup:ksoup-network", version.ref = "ksoup" }
+diamondedge-logging = { module = "com.diamondedge:logging", version.ref = "diamondedge-logging" }
+jsonpathkt-kotlinx = { module = "com.eygraber:jsonpathkt-kotlinx", version.ref = "jsonpathkt-kotlinx" }
+filekit-dialogs = { module = "io.github.vinceglb:filekit-dialogs", version.ref = "filekit" }
+filekit-dialogs-compose = { module = "io.github.vinceglb:filekit-dialogs-compose", version.ref = "filekit" }
+compose-native-tray = { module = "io.github.kdroidfilter:composenativetray", version.ref = "compose-native-tray" }
+# Workaround for Kotlin compiler bug
+stately-common = { module = "co.touchlab:stately-common", version.ref = "stately-common" }
+jsystemthemedetector = { module = "org.openani.jsystemthemedetector:jSystemThemeDetector", version.ref = "jsystemthemedetector" }
+turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+materialkolor = { module = "com.materialkolor:material-kolor", version.ref = "materialkolor" }
+constraintlayout-compose = { module = "tech.annexflow.compose:constraintlayout-compose-multiplatform", version.ref = "constraintlayout-compose" }
+bytebuddy-agent = { module = "net.bytebuddy:byte-buddy-agent", version.ref = "bytebuddy" }
+bytebuddy = { module = "net.bytebuddy:byte-buddy", version.ref = "bytebuddy" }
+sentry-kotlin-multiplatform = { module = "io.sentry:sentry-kotlin-multiplatform", version.ref = "sentry-kotlin-multiplatform" }
+sentry-compose-android = { module = "io.sentry:sentry-compose-android", version.ref = "sentry-compose-android" }
+awssdk-s3 = { module = "software.amazon.awssdk:s3", version.ref = "s3" }
+kmpalette-core = { module = "com.materialkolor.palette:core", version.ref = "kmpalette" }
+haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
+aboutlibraries-compose-m3 = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutlibraries" }
+
+firebase-analytics = { module = "dev.gitlive:firebase-analytics", version.ref = "gitlive-firebase" }
+google-firebase-common = { module = "com.google.firebase:firebase-common", version.ref = "google-firebase" }
+google-firebase-analytics = { module = "com.google.firebase:firebase-analytics", version.ref = "google-firebase" }
+posthog-android = { module = "com.posthog:posthog-android", version.ref = "posthog-android" }
+posthog-java = { module = "com.posthog.java:posthog", version.ref = "posthog-java" }

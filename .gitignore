@@ -1,0 +1,24 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+local.properties
+.kotlin/
+**/test-sandbox/
+*.log
+*.jks
+*.keystore
+
+# Android build outputs
+app/android/release/
+app/android/debug/
+
+### IDE ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+.vscode/
+.DS_Store

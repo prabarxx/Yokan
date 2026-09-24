@@ -1,0 +1,79 @@
+name: Bug 报告
+description: 提交一个 bug
+labels: []
+type: Bug
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎反馈 bug！
+        # 在提交之前，请确保你已经搜索过已有的 issues，确保没有重复问题。
+        # 在提交之前，请确保你已经搜索过已有的 issues，确保没有重复问题。
+        # 在提交之前，请确保你已经搜索过已有的 issues，确保没有重复问题。
+        例如，对于 "下载不了在线资源" 问题，请先搜索 "下载"，看看是否已经有人提出过，如果有就去那个议题里点赞即可，无需重复提交。
+        ## 每个 issue 只能提交一个问题
+        多个问题需要分多个 issue 提交，否则只有第一个问题会被考虑。
+        
+        ----
+        请尽量提供多的信息，这将帮助问题更快解决。
+
+  - type: textarea
+    id: issue-description
+    attributes:
+      label: 问题描述
+      description: 详细描述你遇到的问题，建议附加截图或录屏。
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 说明如何让这个问题再次发生，越详细越好。如果不确定如何复现，请留空。
+    validations:
+      required: false
+
+  - type: input
+    id: version-ani
+    attributes:
+      label: Ani 版本号
+      description: 你正在使用的 Ani 版本号，可在 "设置-软件更新" 中找到，如 `4.0.0`。`4.4.0-beta01` 也可以简写为 `440b1`。
+      placeholder: "例如: 4.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 操作系统
+      description: 不选择表示可能均受影响
+      multiple: true
+      options:
+        - Android 手机/平板
+        - Windows
+        - iOS (请备注系统版本)
+        - iPadOS (请备注系统版本)
+        - macOS (M 系列芯片)
+        - Ubuntu
+        - Arch Linux
+        - 其他 Linux 系统
+        - Android TV
+        - macOS (Intel)
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs-system
+    attributes:
+      label: 应用日志
+      description: |
+        这非常重要!!! 很多问题都需要日志才能解决，如果现在不提供日志，稍后开发者也很可能会问你要日志。缺少日志的议题可能会被直接关闭。
+        对于 PC 端用户，在 "设置-关于" 中点击打开日志目录，把 `app.log` 复制拖到这里。
+        对于 Android 用户，在 "设置-关于" 中分享日志，可以分享到 Telegram 群内获取链接，或者自行上传到这里，或者上传到 pastebin 等网站。
+      placeholder: |
+        拖拽文件到这里。
+        同时说明问题的发生时间，最好精确到分钟 (例如 19:43 左右)。
+      value: "..."
+    validations:
+      required: false
