@@ -70,15 +70,16 @@ fun AnimePosterCard(
                 )
 
                 // Badge de puntuación
-                if (anime.averageScore != null && anime.averageScore > 0) {
+                val score = anime.averageScore
+                if (score != null && score > 0) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(6.dp)
                             .background(
                                 color = when {
-                                    anime.averageScore >= 75 -> Color(0xFF4CAF50)
-                                    anime.averageScore >= 60 -> Color(0xFFFF9800)
+                                    score >= 75 -> Color(0xFF4CAF50)
+                                    score >= 60 -> Color(0xFFFF9800)
                                     else -> Color(0xFFF44336)
                                 },
                                 shape = RoundedCornerShape(6.dp)
@@ -86,7 +87,7 @@ fun AnimePosterCard(
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "${anime.averageScore}%",
+                            text = "$score%",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,

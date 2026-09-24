@@ -103,7 +103,8 @@ fun TrendingCarousel(
                             .padding(16.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (anime.averageScore != null && anime.averageScore > 0) {
+                            val score = anime.averageScore
+                            if (score != null && score > 0) {
                                 Box(
                                     modifier = Modifier
                                         .background(
@@ -113,7 +114,7 @@ fun TrendingCarousel(
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = "${anime.averageScore}%",
+                                        text = "$score%",
                                         color = Color.White,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,

@@ -188,9 +188,10 @@ fun AnimeDetailsScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
 
-                        if (!anime.title.native.isNullOrBlank() && anime.title.native != anime.title.displayTitle) {
+                        val nativeTitle = anime.title.native
+                        if (!nativeTitle.isNullOrBlank() && nativeTitle != anime.title.displayTitle) {
                             Text(
-                                text = anime.title.native,
+                                text = nativeTitle,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -200,14 +201,15 @@ fun AnimeDetailsScreen(
                         Spacer(modifier = Modifier.height(6.dp))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (anime.averageScore != null && anime.averageScore > 0) {
+                            val score = anime.averageScore
+                            if (score != null && score > 0) {
                                 Box(
                                     modifier = Modifier
                                         .background(Color(0xFF4CAF50), RoundedCornerShape(4.dp))
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = "${anime.averageScore}%",
+                                        text = "$score%",
                                         color = Color.White,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
@@ -216,9 +218,10 @@ fun AnimeDetailsScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                             }
 
-                            if (!anime.status.isNullOrBlank()) {
+                            val status = anime.status
+                            if (!status.isNullOrBlank()) {
                                 Text(
-                                    text = anime.status,
+                                    text = status,
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.SemiBold,
