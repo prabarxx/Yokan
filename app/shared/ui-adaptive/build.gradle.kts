@@ -33,7 +33,6 @@ kotlin {
         api(libs.koin.core)
     }
     sourceSets.commonTest.dependencies {
-        implementation(projects.utils.uiTesting)
     }
     sourceSets.androidMain.dependencies {
         api(libs.compose.material3.adaptive.core)

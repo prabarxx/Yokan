@@ -12,21 +12,16 @@ plugins {
     alias(libs.plugins.kotlin.plugin.serialization)
 
     // org.jetbrains.kotlinx.atomicfu
+    idea
 }
 
 kotlin {
     android {
-        namespace = "me.him188.ani.app.ui.mediaselect"
+        namespace = "me.him188.ani.app.ui.lang"
     }
-
     sourceSets.commonMain.dependencies {
-        api(projects.app.shared.uiFoundation)
-        api(projects.app.shared.uiAdaptive)
-        api(projects.datasource.datasourceApi)
         implementation(libs.atomicfu)
-        implementation(projects.utils.ktorClient)
-        implementation(libs.compose.components.resources)
-        implementation(projects.utils.logging)
+        api(libs.compose.components.resources)
     }
     sourceSets.commonTest.dependencies {
     }
@@ -35,3 +30,15 @@ kotlin {
     sourceSets.desktopMain.dependencies {
     }
 }
+
+compose.resources {
+    publicResClass = true
+    packageOfResClass = "me.him188.ani.app.ui.lang"
+    customDirectory(
+        "commonMain",
+        project.provider {
+            project.layout.projectDirectory.dir("src/androidMain/res")
+        },
+    )
+}
+

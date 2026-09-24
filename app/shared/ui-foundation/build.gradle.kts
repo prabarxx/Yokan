@@ -20,6 +20,7 @@ kotlin {
     }
     sourceSets.commonMain.dependencies {
         api(projects.app.shared.appPlatform)
+        api(projects.app.shared.appLang)
         api(projects.utils.uiPreview)
         api(projects.utils.platform)
         api(libs.kotlinx.coroutines.core)

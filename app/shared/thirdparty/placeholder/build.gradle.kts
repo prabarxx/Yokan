@@ -22,7 +22,6 @@ kotlin {
         implementation(libs.androidx.annotation)
     }
     sourceSets.commonTest.dependencies {
-        implementation(projects.utils.uiTesting)
     }
     sourceSets.androidMain.dependencies {
         implementation(libs.compose.material3.adaptive.core)

@@ -22,10 +22,8 @@ kotlin {
         api(projects.app.shared.appPlatform)
         api(libs.mediamp.api)
         api(projects.utils.coroutines)
-        api(projects.danmaku.danmakuApi)
     }
     sourceSets.commonTest.dependencies {
-        implementation(projects.utils.uiTesting)
     }
     sourceSets.desktopMain.dependencies {
     }

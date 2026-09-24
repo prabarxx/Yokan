@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ Copyright (C) 2024-2025 OpenAni and contributors.
+  ~
+  ~ Use of this source code is governed by the GNU AGPLv3 license.
+  -->
+
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string name="settings_media_preference_title">Preferencias de selección de recursos</string>
+    <string name="settings_media_preference_description">Establece las preferencias de selección por defecto. Esto afectará tanto a la reproducción en línea como a la descarga en caché</string>
+    <string name="settings_media_preference_override_notice">La selección manual realizada durante la reproducción de cada anime tendrá prioridad sobre estos ajustes</string>
+    <string name="settings_media_any">Cualquiera</string>
+    <string name="settings_media_none">Ninguno</string>
+    <string name="settings_media_subtitle_language">Idioma de subtítulos / audio</string>
+    <string name="settings_media_resolution">Resolución</string>
+    <string name="settings_media_resolution_description">Las resoluciones no seleccionadas seguirán mostrándose, pero no se seleccionarán automáticamente</string>
+    <string name="settings_media_alliance">Fansub / Servidor</string>
+    <string name="settings_media_alliance_description">Admite expresiones regulares separadas por comas. Mayor prioridad a los primeros listados\n\nEjemplo: AnimeOnlineNinja, Crunchyroll, Netflix</string>
+    <string name="settings_media_advanced_settings">Configuración avanzada</string>
+    <string name="settings_media_advanced_settings_description">Ajusta con precisión el algoritmo de selección automática de fuentes. Por lo general no es necesario cambiar estos ajustes</string>
+    <string name="settings_media_source_web">En línea (Recomendado)</string>
+    <string name="settings_media_source_bt">BitTorrent</string>
+    <string name="settings_media_source_no_preference">Sin preferencia</string>
+    <string name="settings_media_prefer_source_type">Tipo de fuente preferida</string>
+    <string name="settings_media_prefer_source_type_description">Las fuentes en línea inician más rápido pero pueden tener menor tasa de bits, las fuentes BT tienen mayor calidad pero requieren descarga previa</string>
+    <string name="settings_media_fast_select_web">Selección rápida de fuentes en línea</string>
+    <string name="settings_media_fast_select_web_description">Ordena por fuente y selecciona de inmediato en cuanto las fuentes principales devuelvan resultados, sin esperar al resto. Reduce drásticamente el tiempo de espera</string>
+    <string name="settings_media_wait_time_none">No esperar</string>
+    <string name="settings_media_wait_time_3s">Tras 3 segundos</string>
+    <string name="settings_media_wait_time_5s">Tras 5 segundos</string>
+    <string name="settings_media_wait_time_8s">Tras 8 segundos</string>
+    <string name="settings_media_wait_time_10s">Tras 10 segundos</string>
+    <string name="settings_media_wait_time_15s">Tras 15 segundos</string>
+    <string name="settings_media_wait_time_20s">Tras 20 segundos</string>
+    <string name="settings_media_wait_time_30s">Tras 30 segundos</string>
+    <string name="settings_media_wait_time_infinite">Sin límite</string>
+    <string name="settings_media_video_link_resolve_timeout">Tiempo límite para resolver enlace de video</string>
+    <string name="settings_media_video_link_resolve_timeout_description">Tiempo máximo permitido para obtener el enlace de reproducción final de fuentes en línea. Si tarda demasiado, fallará rápidamente para reintentar o cambiar de fuente. Se recomiendan de 8 a 15 segundos</string>
+    <string name="settings_media_max_wait_time">Tiempo máximo de espera</string>
+    <string name="settings_media_max_wait_time_description">Tiempo de espera máximo por consulta. Al finalizar este tiempo, se seleccionará automáticamente la mejor fuente disponible según tus preferencias. Se recomiendan 5–10 segundos</string>
+    <string name="settings_media_web_search_cache_ttl">Duración de caché de búsqueda web</string>
+    <string name="settings_media_web_search_cache_ttl_description">Reutiliza los resultados de búsqueda web al cambiar de episodio o volver al reproductor. La duración efectiva será la menor entre este valor y el definido por cada fuente</string>
+    <string name="settings_media_cache_ttl_none">Desactivada</string>
+    <string name="settings_media_cache_ttl_5min">5 minutos</string>
+    <string name="settings_media_cache_ttl_15min">15 minutos</string>
+    <string name="settings_media_cache_ttl_30min">30 minutos</string>
+    <string name="settings_media_cache_ttl_1h">1 hora</string>
+    <string name="settings_media_cache_ttl_6h">6 horas</string>
+    <string name="settings_media_cache_ttl_1d">1 día</string>
+    <string name="settings_media_show_disabled">Mostrar fuentes de datos desactivadas</string>
+    <string name="settings_media_show_disabled_description">Durante la reproducción, muestra las fuentes desactivadas en color gris en lugar de ocultarlas. Permite activarlas temporalmente si las fuentes preferidas no tienen el episodio</string>
+    <string name="settings_media_image_captcha_auto_solve">Resolver captchas de imagen automáticamente</string>
+    <string name="settings_media_image_captcha_auto_solve_description">Utiliza el modelo local integrado para reconocer y resolver captchas de fuentes web automáticamente, sin intervención manual. Se ejecuta totalmente en tu dispositivo; no se suben imágenes a internet</string>
+    <string name="settings_media_hide_no_subtitle">Ocultar recursos sin subtítulos</string>
+    <string name="settings_media_hide_no_subtitle_description">Filtra recursos en idioma original sin subtítulos (raw)</string>
+    <string name="settings_media_hide_single_episode">Ocultar recursos de episodios individuales tras 1 año</string>
+    <string name="settings_media_hide_single_episode_description">Los episodios individuales de torrents antiguos suelen quedarse sin semillas con el tiempo</string>
+    <string name="settings_media_prefer_seasons">Priorizar paquetes de temporada completa en BT</string>
+    <string name="settings_media_prefer_seasons_description">Los paquetes de temporada completa suelen descargarse más rápido y estar mejor conservados</string>
+    <string name="settings_media_auto_enable_last">Habilitar automáticamente la última fuente activada temporalmente</string>
+    <string name="settings_media_auto_enable_last_description">Si una fuente estaba desactivada pero se usó al ver un anime, habilitarla de nuevo al reproducir la próxima vez</string>
+    <string name="settings_media_auto_cache_none">Ajuste actual: No almacenar automáticamente en caché</string>
+    <string name="settings_media_auto_cache_all">Ajuste actual: Descargar en caché todos los episodios pendientes, </string>
+    <string name="settings_media_auto_cache_partial">Ajuste actual: Descargar en caché %d episodios posteriores al progreso actual, </string>
+    <string name="settings_media_auto_cache_space">Espacio estimado requerido: %s/anime</string>
+    <string name="settings_media_sort_tip">Mantén presionado para ordenar; los elementos superiores tienen mayor prioridad.\nMenos elementos seleccionados acelera las búsquedas.</string>
+</resources>

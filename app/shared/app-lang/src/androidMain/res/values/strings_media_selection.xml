@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+  ~ Copyright (C) 2024-2025 OpenAni and contributors.
+  ~
+  ~ 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+  ~ Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+  ~
+  ~ https://github.com/open-ani/ani/blob/main/LICENSE
+  -->
+
+<!--@formatter:off-->
+
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string name="settings_media_preference_title">Resource Selection Preferences</string>
+    <string name="settings_media_preference_description">Set default resource selection preferences. This will affect both online playback and caching</string>
+    <string name="settings_media_preference_override_notice">The selection made during playback for each anime will override these settings</string>
+    <string name="settings_media_any">Any</string>
+    <string name="settings_media_none">None</string>
+    <string name="settings_media_subtitle_language">Subtitle Language</string>
+    <string name="settings_media_resolution">Resolution</string>
+    <string name="settings_media_resolution_description">Unselected resolutions will still be displayed, but won\'t be automatically selected</string>
+    <string name="settings_media_alliance">Subtitle Group</string>
+    <string name="settings_media_alliance_description">Supports regular expressions, separated by commas. Higher priority is given to expressions listed first\n\nExample: 桜都, 喵萌, 北宇治\nWill prioritize 桜都 subtitle group resources, then 喵萌, and so on</string>
+    <string name="settings_media_advanced_settings">Advanced Settings</string>
+    <string name="settings_media_advanced_settings_description">Fine-tune the data source auto-selection algorithm. Generally, you don\'t need to modify these settings</string>
+    <string name="settings_media_source_web">Online (Recommended)</string>
+    <string name="settings_media_source_bt">BT</string>
+    <string name="settings_media_source_no_preference">No preference</string>
+    <string name="settings_media_prefer_source_type">Preferred Data Source Type</string>
+    <string name="settings_media_prefer_source_type_description">Online sources load faster but may have lower resolution, BT sources are the opposite</string>
+    <string name="settings_media_fast_select_web">Quick Select Online Sources</string>
+    <string name="settings_media_fast_select_web_description">Sort by data source, and select immediately when higher-ranked sources complete their query, without waiting for other sources. Can significantly reduce waiting time</string>
+    <string name="settings_media_wait_time_none">Don\'t wait</string>
+    <string name="settings_media_wait_time_3s">After 3 seconds</string>
+    <string name="settings_media_wait_time_5s">After 5 seconds</string>
+    <string name="settings_media_wait_time_8s">After 8 seconds</string>
+    <string name="settings_media_wait_time_10s">After 10 seconds</string>
+    <string name="settings_media_wait_time_15s">After 15 seconds</string>
+    <string name="settings_media_wait_time_20s">After 20 seconds</string>
+    <string name="settings_media_wait_time_30s">After 30 seconds</string>
+    <string name="settings_media_wait_time_infinite">Unlimited</string>
+    <string name="settings_media_video_link_resolve_timeout">Video Link Resolve Timeout</string>
+    <string name="settings_media_video_link_resolve_timeout_description">Maximum time allowed to resolve the final playable URL for online video sources. If resolution takes too long, playback will fail faster and switch or retry sooner. 8-15 seconds is recommended</string>
+    <string name="settings_media_max_wait_time">Maximum Wait Time</string>
+    <string name="settings_media_max_wait_time_description">Maximum wait time for each query. At the end of this time, a data source will be automatically selected from those already queried based on your preferences. If the wait time is too short, your preference settings may be ignored; if longer, it can better meet your preferences but may cause slow playback starts. 5–10 seconds is recommended</string>
+    <string name="settings_media_web_search_cache_ttl">Web Search Cache Duration</string>
+    <string name="settings_media_web_search_cache_ttl_description">Reuse web source search results when switching episodes or quickly re-entering the player. The effective duration is the smaller of this value and the one defined by each data source</string>
+    <string name="settings_media_cache_ttl_none">Off</string>
+    <string name="settings_media_cache_ttl_5min">5 minutes</string>
+    <string name="settings_media_cache_ttl_15min">15 minutes</string>
+    <string name="settings_media_cache_ttl_30min">30 minutes</string>
+    <string name="settings_media_cache_ttl_1h">1 hour</string>
+    <string name="settings_media_cache_ttl_6h">6 hours</string>
+    <string name="settings_media_cache_ttl_1d">1 day</string>
+    <string name="settings_media_show_disabled">Show Disabled Data Sources</string>
+    <string name="settings_media_show_disabled_description">During playback, display disabled data sources from the "Data Source Management" settings in gray, rather than hiding them. This allows temporarily enabling disabled sources when preferred sources don\'t have resources</string>
+    <string name="settings_media_image_captcha_auto_solve">Auto-solve image captchas</string>
+    <string name="settings_media_image_captcha_auto_solve_description">Use the built-in offline model to automatically recognize and pass image captchas from online sources, without manual input. Recognition runs entirely on your device; no images are uploaded. When disabled, captchas must be solved manually</string>
+    <string name="settings_media_hide_no_subtitle">Hide Resources Without Subtitles</string>
+    <string name="settings_media_hide_no_subtitle_description">Can filter out some raw resources, but may also filter out resources where subtitle type wasn\'t detected</string>
+    <string name="settings_media_hide_single_episode">Hide Single-Episode BT Resources After One Year</string>
+    <string name="settings_media_hide_single_episode_description">Single-episode resources typically have no speed after an anime has been completed for a year</string>
+    <string name="settings_media_prefer_seasons">Prioritize Season Collections for BT Resources</string>
+    <string name="settings_media_prefer_seasons_description">Season collection resources are usually faster, recommended to enable</string>
+    <string name="settings_media_auto_enable_last">Automatically Enable Last Temporarily Enabled Data Source</string>
+    <string name="settings_media_auto_enable_last_description">If a data source is disabled in the "Data Source Management" settings but used when watching an anime, automatically enable this source the next time this anime is played</string>
+    <string name="settings_media_auto_cache_none">Current setting: Don\'t auto-cache</string>
+    <string name="settings_media_auto_cache_all">Current setting: Auto-cache all unwatched episodes, </string>
+    <string name="settings_media_auto_cache_partial">Current setting: Auto-cache %d episodes after current progress, </string>
+    <string name="settings_media_auto_cache_space">Estimated space usage %s/anime</string>
+    <string name="settings_media_sort_tip">Long press to sort, higher-ranked items are prioritized.\nFewer selected items means faster queries.</string>
+</resources>
