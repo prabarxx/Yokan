@@ -49,6 +49,7 @@ kotlin {
         api(projects.app.shared.appLang)
         api(projects.utils.io)
         api(projects.utils.serialization)
+        api(projects.utils.ktorClient)
         api(libs.kotlinx.datetime)
         api(libs.kotlinx.coroutines.core)
         api(libs.kotlinx.collections.immutable)
