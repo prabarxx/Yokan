@@ -128,6 +128,7 @@ dependencies {
     implementation(projects.utils.coroutines)
     implementation(projects.utils.platform)
     implementation(projects.utils.logging)
+    implementation(projects.utils.io)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
