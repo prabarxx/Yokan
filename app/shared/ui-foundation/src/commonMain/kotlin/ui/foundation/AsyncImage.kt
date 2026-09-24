@@ -72,8 +72,28 @@ private const val MEBIBYTE = 1024L * 1024L
 private const val IMAGE_DOWNLOAD_CACHE_SIZE = 100L * MEBIBYTE
 private const val ANI_IMAGE_CACHE_DIRECTORY = "image-cache"
 
-val LocalSketch = staticCompositionLocalOf<Sketch> {
-    error("No Ani image loader provided")
+import io.ktor.client.HttpClient
+import me.him188.ani.utils.ktor.asScopedHttpClient
+
+val LocalSketch = staticCompositionLocalOf<Sketch?> {
+    null
+}
+
+@Composable
+fun currentSketch(): Sketch {
+    val provided = LocalSketch.current
+    if (provided != null) return provided
+    val context = LocalPlatformContext.current
+    return remember(context) {
+        val client = HttpClient().asScopedHttpClient()
+        val cacheDir = runCatching {
+            LocalContext.current.files.cacheDir
+                .resolve(ANI_IMAGE_CACHE_DIRECTORY)
+                .absolutePath
+                .toPath()
+        }.getOrNull()
+        createDefaultSketch(context, client, cacheDir)
+    }
 }
 
 /** A library-neutral successful image load result exposed to feature UI modules. */
@@ -200,9 +220,10 @@ internal fun AniAsyncImage(
     }
 
     ImageLoadStateEffect(state, onLoading, onSuccess, onError)
+    val sketch = currentSketch()
     SketchAsyncImage(
         request = request,
-        sketch = LocalSketch.current,
+        sketch = sketch,
         contentDescription = contentDescription,
         modifier = modifier.onSizeChanged { size ->
             val roundedSize = size.toAniImageRequestSize()
@@ -282,9 +303,10 @@ internal fun rememberAniAsyncImagePainter(
             requestSize = requestSize,
         )
     }
+    val sketch = currentSketch()
     return rememberAsyncImagePainter(
         request = request,
-        sketch = LocalSketch.current,
+        sketch = sketch,
         state = finalState,
         contentScale = contentScale,
         filterQuality = filterQuality,

@@ -8,7 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,27 +22,38 @@ import app.yokan.ui.screens.AnimeDetailsScreen
 import app.yokan.ui.screens.HomeScreen
 import app.yokan.ui.screens.TorrentSelectionModal
 import app.yokan.ui.screens.VideoPlayerScreen
+import io.ktor.client.HttpClient
+import me.him188.ani.app.ui.foundation.LocalSketch
+import me.him188.ani.app.ui.foundation.rememberAniSketchInstance
+import me.him188.ani.utils.ktor.asScopedHttpClient
 import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
 
     private val aniListClient: AniListClient by inject()
     private val nyaaSearchEngine: NyaaSearchEngine by inject()
+    private val httpClient: HttpClient by inject()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         setContent {
-            YokanTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    YokanApp(
-                        aniListClient = aniListClient,
-                        nyaaSearchEngine = nyaaSearchEngine,
-                    )
+            val scopedClient = remember { httpClient.asScopedHttpClient() }
+            val sketch = rememberAniSketchInstance(scopedClient)
+            CompositionLocalProvider(
+                LocalSketch provides sketch,
+            ) {
+                YokanTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        YokanApp(
+                            aniListClient = aniListClient,
+                            nyaaSearchEngine = nyaaSearchEngine,
+                        )
+                    }
                 }
             }
         }
