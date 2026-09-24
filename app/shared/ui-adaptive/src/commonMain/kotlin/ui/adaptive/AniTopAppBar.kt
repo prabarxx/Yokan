@@ -69,12 +69,10 @@ import me.him188.ani.app.ui.foundation.layout.isWidthAtLeastMedium
 import me.him188.ani.app.ui.foundation.layout.paddingIfNotEmpty
 import me.him188.ani.app.ui.foundation.layout.paneHorizontalPadding
 import me.him188.ani.app.ui.foundation.rememberCurrentTopAppBarContainerColor
-import me.him188.ani.app.ui.foundation.session.SelfAvatar
 import me.him188.ani.app.ui.foundation.theme.AniThemeDefaults
 import me.him188.ani.app.ui.foundation.theme.appChromeFrostedGlass
 import me.him188.ani.app.ui.foundation.theme.isAppChromeFrostedGlassActive
 import me.him188.ani.app.ui.foundation.widgets.BackNavigationIconButton
-import me.him188.ani.app.ui.user.TestSelfInfoUiState
 import me.him188.ani.utils.platform.annotations.TestOnly
 import me.him188.ani.utils.platform.isDesktop
 
@@ -357,13 +355,7 @@ private fun PreviewAniTopAppBar() = ProvideCompositionLocalsForPreview {
                 Icon(Icons.Rounded.Settings, null)
             }
         },
-        avatar = { recommendedSize ->
-            SelfAvatar(
-                TestSelfInfoUiState,
-                size = recommendedSize,
-                onClick = { },
-            )
-        },
+        avatar = null,
         searchIconButton = {
             IconButton({}) {
                 Icon(Icons.Rounded.Search, null)
