@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Nombre del tag o versión de release (ej. v1.0.0)'
+        description: 'Nombre del tag o versión de release (ej. v1.0.1)'
         required: false
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
@@ -113,7 +113,7 @@ jobs:
           elif [ -n "${{ inputs.tag_name }}" ]; then
             echo "val=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "val=v1.0.0" >> "$GITHUB_OUTPUT"
+            echo "val=v1.0.1" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish GitHub Release

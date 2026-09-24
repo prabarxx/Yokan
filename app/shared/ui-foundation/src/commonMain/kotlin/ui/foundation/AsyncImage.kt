@@ -56,11 +56,13 @@ import com.github.panpf.sketch.util.Size
 import com.github.panpf.sketch.util.asComposeImageBitmap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import io.ktor.client.HttpClient
 import me.him188.ani.app.platform.LocalContext
 import me.him188.ani.app.platform.files
 import me.him188.ani.utils.io.absolutePath
 import me.him188.ani.utils.io.resolve
 import me.him188.ani.utils.ktor.ScopedHttpClient
+import me.him188.ani.utils.ktor.asScopedHttpClient
 import me.him188.ani.utils.platform.currentPlatform
 import me.him188.ani.utils.platform.isDesktop
 import me.him188.ani.utils.platform.isIos
@@ -72,9 +74,6 @@ private const val MEBIBYTE = 1024L * 1024L
 private const val IMAGE_DOWNLOAD_CACHE_SIZE = 100L * MEBIBYTE
 private const val ANI_IMAGE_CACHE_DIRECTORY = "image-cache"
 
-import io.ktor.client.HttpClient
-import me.him188.ani.utils.ktor.asScopedHttpClient
-
 val LocalSketch = staticCompositionLocalOf<Sketch?> {
     null
 }
@@ -84,14 +83,17 @@ fun currentSketch(): Sketch {
     val provided = LocalSketch.current
     if (provided != null) return provided
     val context = LocalPlatformContext.current
-    return remember(context) {
+    val localCtx = LocalContext.current
+    return remember(context, localCtx) {
         val client = HttpClient().asScopedHttpClient()
-        val cacheDir = runCatching {
-            LocalContext.current.files.cacheDir
+        val cacheDir = try {
+            localCtx.files.cacheDir
                 .resolve(ANI_IMAGE_CACHE_DIRECTORY)
                 .absolutePath
                 .toPath()
-        }.getOrNull()
+        } catch (_: Throwable) {
+            null
+        }
         createDefaultSketch(context, client, cacheDir)
     }
 }
