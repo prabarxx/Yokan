@@ -23,7 +23,6 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import me.him188.ani.datasources.api.source.FactoryId
 import me.him188.ani.utils.analytics.Analytics
 import me.him188.ani.utils.analytics.AnalyticsEvent
 import me.him188.ani.utils.analytics.AnalyticsEvent.Companion.EpisodeEnter
@@ -190,10 +189,10 @@ interface AniNavigator {
     }
 
     fun navigateEditMediaSource(
-        factoryId: FactoryId,
+        factoryId: String,
         mediaSourceInstanceId: String,
     ) {
-        navigate(NavRoutes.EditMediaSource(factoryId.value, mediaSourceInstanceId))
+        navigate(NavRoutes.EditMediaSource(factoryId, mediaSourceInstanceId))
     }
 
     fun navigateTorrentPeerSettings() {

@@ -46,6 +46,10 @@ kotlin {
 
     sourceSets.commonMain.dependencies {
         api(projects.utils.platform)
+        api(projects.app.shared.appLang)
+        api(projects.utils.io)
+        api(projects.utils.serialization)
+        api(libs.kotlinx.datetime)
         api(libs.kotlinx.coroutines.core)
         api(libs.kotlinx.collections.immutable)
 
