@@ -6,8 +6,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -24,6 +29,8 @@ import app.yokan.ui.screens.HomeScreen
 import app.yokan.ui.screens.TorrentSelectionModal
 import app.yokan.ui.screens.VideoPlayerScreen
 import io.ktor.client.HttpClient
+import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuite
+import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuiteLayout
 import me.him188.ani.app.ui.foundation.LocalSketch
 import me.him188.ani.app.ui.foundation.rememberAniSketchInstance
 import me.him188.ani.utils.ktor.asScopedHttpClient
@@ -79,6 +86,7 @@ private fun YokanApp(
 ) {
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
+    var selectedNavTab by remember { mutableStateOf(0) }
 
     BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null) {
         if (torrentModalState != null) {
@@ -92,35 +100,63 @@ private fun YokanApp(
         }
     }
 
-    when (val screen = currentScreen) {
-        is Screen.Home -> {
-            HomeScreen(
-                aniListClient = aniListClient,
-                onAnimeClick = { anime ->
-                    currentScreen = Screen.Details(anime)
-                },
-            )
-        }
-        is Screen.Details -> {
-            AnimeDetailsScreen(
-                animeId = screen.anime.id,
-                initialAnime = screen.anime,
-                aniListClient = aniListClient,
-                onEpisodeClick = { anime, episode ->
-                    torrentModalState = TorrentModalState(anime, episode)
-                },
-                onBack = {
-                    currentScreen = Screen.Home
-                },
-            )
-        }
-        is Screen.Player -> {
-            VideoPlayerScreen(
-                torrent = screen.torrent,
-                onBack = {
-                    currentScreen = screen.previousScreen
-                },
-            )
+    if (currentScreen is Screen.Player) {
+        val playerScreen = currentScreen as Screen.Player
+        VideoPlayerScreen(
+            torrent = playerScreen.torrent,
+            onBack = {
+                currentScreen = playerScreen.previousScreen
+            },
+        )
+    } else {
+        AniNavigationSuiteLayout(
+            navigationSuite = {
+                AniNavigationSuite {
+                    item(
+                        selected = selectedNavTab == 0 && currentScreen is Screen.Home,
+                        onClick = {
+                            selectedNavTab = 0
+                            currentScreen = Screen.Home
+                        },
+                        icon = { Icon(Icons.Rounded.Explore, contentDescription = "Explorar") },
+                        label = { Text("Explorar") },
+                    )
+                    item(
+                        selected = selectedNavTab == 1,
+                        onClick = {
+                            selectedNavTab = 1
+                            currentScreen = Screen.Home
+                        },
+                        icon = { Icon(Icons.Rounded.Search, contentDescription = "Buscar") },
+                        label = { Text("Buscar") },
+                    )
+                }
+            }
+        ) {
+            when (val screen = currentScreen) {
+                is Screen.Home -> {
+                    HomeScreen(
+                        aniListClient = aniListClient,
+                        onAnimeClick = { anime ->
+                            currentScreen = Screen.Details(anime)
+                        },
+                    )
+                }
+                is Screen.Details -> {
+                    AnimeDetailsScreen(
+                        animeId = screen.anime.id,
+                        initialAnime = screen.anime,
+                        aniListClient = aniListClient,
+                        onEpisodeClick = { anime, episode ->
+                            torrentModalState = TorrentModalState(anime, episode)
+                        },
+                        onBack = {
+                            currentScreen = Screen.Home
+                        },
+                    )
+                }
+                is Screen.Player -> Unit
+            }
         }
     }
 

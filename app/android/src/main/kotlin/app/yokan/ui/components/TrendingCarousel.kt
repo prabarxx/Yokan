@@ -1,150 +1,105 @@
 package app.yokan.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.carousel.CarouselDefaults
+import androidx.compose.material3.carousel.HorizontalCenteredHeroCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.yokan.anilist.model.AniListMedia
 import me.him188.ani.app.ui.foundation.AsyncImage
+import me.him188.ani.app.ui.foundation.layout.CarouselAutoAdvanceEffect
+import me.him188.ani.app.ui.foundation.layout.CarouselItem
+import me.him188.ani.app.ui.foundation.layout.CarouselItemDefaults
+import me.him188.ani.app.ui.foundation.layout.rememberMaskShape
 
 @Composable
 fun TrendingCarousel(
     trendingList: List<AniListMedia>,
     onAnimeClick: (AniListMedia) -> Unit,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    itemSpacing: Dp = 8.dp,
 ) {
     if (trendingList.isEmpty()) return
 
-    val pagerState = rememberPagerState(pageCount = { trendingList.size })
+    val size = CarouselItemDefaults.itemSize()
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val carouselState = rememberCarouselState(initialItem = 0) { trendingList.size }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = "Tendencias en Emisión",
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
 
-        HorizontalPager(
-            state = pagerState,
-            contentPadding = PaddingValues(horizontal = 24.dp),
-            pageSpacing = 12.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp),
-        ) { page ->
-            val anime = trendingList[page]
-            val imageUrl = anime.bannerImage?.takeIf { it.isNotBlank() }
-                ?: anime.coverImage?.bestQualityUrl
+        Box(modifier = Modifier.padding(contentPadding).hoverable(interactionSource)) {
+            HorizontalCenteredHeroCarousel(
+                state = carouselState,
+                modifier = Modifier.fillMaxWidth(),
+                maxItemWidth = 320.dp,
+                itemSpacing = itemSpacing,
+                flingBehavior = CarouselDefaults.multiBrowseFlingBehavior(
+                    state = carouselState,
+                    snapAnimationSpec = spring(stiffness = Spring.StiffnessMedium),
+                ),
+            ) { index ->
+                val anime = trendingList[index]
+                val imageUrl = anime.bannerImage?.takeIf { it.isNotBlank() }
+                    ?: anime.coverImage?.bestQualityUrl
 
-            Card(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { onAnimeClick(anime) },
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    if (!imageUrl.isNullOrBlank()) {
+                val scoreText = anime.averageScore?.takeIf { it > 0 }?.let { "★ $it%" }
+                val genreText = anime.genres.take(2).joinToString(" • ")
+                val supporting = listOfNotNull(scoreText, genreText.takeIf { it.isNotBlank() }).joinToString("   ")
+
+                CarouselItem(
+                    label = { CarouselItemDefaults.Text(anime.title.displayTitle, maxLines = 1) },
+                    supportingText = {
+                        if (supporting.isNotBlank()) {
+                            CarouselItemDefaults.Text(supporting, maxLines = 1)
+                        }
+                    },
+                    shape = rememberMaskShape(CarouselItemDefaults.shape),
+                ) {
+                    Surface(
+                        onClick = { onAnimeClick(anime) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         AsyncImage(
                             model = imageUrl,
+                            modifier = Modifier
+                                .height(size.imageHeight)
+                                .fillMaxWidth(),
                             contentDescription = anime.title.displayTitle,
-                            modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop,
-                        )
-                    }
-
-                    // Gradiente oscuro de contraste
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        Color.Black.copy(alpha = 0.85f),
-                                    ),
-                                    startY = 100f,
-                                )
-                            )
-                    )
-
-                    // Info inferior
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(16.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val score = anime.averageScore
-                            if (score != null && score > 0) {
-                                Box(
-                                    modifier = Modifier
-                                        .background(
-                                            color = Color(0xFF4CAF50),
-                                            shape = RoundedCornerShape(4.dp)
-                                        )
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "$score%",
-                                        color = Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                            }
-
-                            if (anime.genres.isNotEmpty()) {
-                                Text(
-                                    text = anime.genres.take(2).joinToString(" • "),
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = anime.title.displayTitle,
-                            color = Color.White,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 4.dp),
                         )
                     }
                 }
             }
+
+            CarouselAutoAdvanceEffect(enabled = !isHovered, carouselState = carouselState)
         }
     }
 }
