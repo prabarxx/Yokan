@@ -24,6 +24,7 @@ kotlin {
         api(projects.utils.uiPreview)
         api(projects.utils.platform)
         api(libs.kotlinx.coroutines.core)
+        api(projects.utils.coroutines)
         api(libs.kotlinx.collections.immutable)
         implementation(libs.kotlinx.serialization.protobuf)
         implementation(projects.app.shared.placeholder)

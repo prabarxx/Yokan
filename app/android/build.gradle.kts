@@ -118,7 +118,6 @@ android {
 dependencies {
     implementation(projects.app.shared.uiFoundation)
     implementation(projects.app.shared.uiAdaptive)
-    implementation(projects.app.shared.uiMediaselect)
     implementation(projects.app.shared.videoPlayer)
     implementation(projects.app.shared.videoPlayer.torrentSource)
     implementation(projects.torrent.torrentApi)

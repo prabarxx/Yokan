@@ -81,7 +81,6 @@ includeProject(":app:shared:app-platform", "app/shared/app-platform")
 includeProject(":app:shared:app-lang", "app/shared/app-lang")
 includeProject(":app:shared:ui-foundation", "app/shared/ui-foundation")
 includeProject(":app:shared:ui-adaptive", "app/shared/ui-adaptive")
-includeProject(":app:shared:ui-mediaselect", "app/shared/ui-mediaselect")
 includeProject(":app:shared:placeholder", "app/shared/thirdparty/placeholder")
 includeProject(":app:shared:paging-compose", "app/shared/thirdparty/paging-compose")
 
