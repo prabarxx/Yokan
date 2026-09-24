@@ -2,6 +2,7 @@ package app.yokan.datasource.nyaa
 
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
@@ -34,10 +35,13 @@ class NyaaSearchEngine(
                 }
             }
 
-            val encodedQuery = io.ktor.http.encodeURLQueryComponent(queryParam)
-            val url = "https://nyaa.si/?page=rss&c=1_0&s=seeders&o=desc&q=$encodedQuery"
-
-            val response = httpClient.get(url)
+            val response = httpClient.get("https://nyaa.si/") {
+                parameter("page", "rss")
+                parameter("c", "1_0")
+                parameter("s", "seeders")
+                parameter("o", "desc")
+                parameter("q", queryParam)
+            }
             if (!response.status.isSuccess()) {
                 throw IllegalStateException("Nyaa request failed with code ${response.status}")
             }
