@@ -17,10 +17,10 @@ class TorrentManager private constructor(context: Context) {
     private val factory = AnitorrentDownloaderFactory()
 
     val downloader: AnitorrentTorrentDownloader<*, *> by lazy {
-        logger.info { "Loading Anitorrent native libraries..." }
+        logger.info("Loading Anitorrent native libraries...")
         factory.libraryLoader.loadLibraries()
         val torrentDir = appContext.cacheDir.resolve("torrents").apply { mkdirs() }
-        logger.info { "Initializing Anitorrent downloader at: ${torrentDir.absolutePath}" }
+        logger.info("Initializing Anitorrent downloader at: ${torrentDir.absolutePath}")
         factory.createDownloader(
             rootDataDirectory = torrentDir.toKtPath().inSystem,
             httpFileDownloader = object : HttpFileDownloader {

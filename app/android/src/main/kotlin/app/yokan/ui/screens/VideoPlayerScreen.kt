@@ -131,7 +131,7 @@ fun VideoPlayerScreen(
         loadingStatus = "Conectando con la red BitTorrent..."
         errorMessage = null
         try {
-            logger.info { "Iniciando descarga torrent para: ${torrent.title}" }
+            logger.info("Iniciando descarga torrent para: ${torrent.title}")
             val torrentManager = TorrentManager.getInstance(context)
             val downloader = torrentManager.downloader
 
@@ -186,7 +186,7 @@ fun VideoPlayerScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            logger.error(e) { "Error al inicializar el torrent" }
+            logger.error("Error al inicializar el torrent: ${e.message}", e)
             errorMessage = "Error al reproducir torrent: ${e.localizedMessage ?: e::class.simpleName}"
             loadingStatus = null
         }

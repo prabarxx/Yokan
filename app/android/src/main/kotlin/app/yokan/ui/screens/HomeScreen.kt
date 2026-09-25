@@ -44,19 +44,21 @@ import me.him188.ani.app.ui.adaptive.AniTopAppBar
 import me.him188.ani.app.ui.foundation.theme.appChromeHazeSource
 import me.him188.ani.app.ui.subject.SubjectGridDefaults
 
+import app.yokan.ui.state.HomeCache
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     aniListClient: AniListClient,
     onAnimeClick: (AniListMedia) -> Unit,
 ) {
-    var trendingList by remember { mutableStateOf<List<AniListMedia>>(emptyList()) }
-    var popularList by remember { mutableStateOf<List<AniListMedia>>(emptyList()) }
+    var trendingList by remember { mutableStateOf(HomeCache.trendingList) }
+    var popularList by remember { mutableStateOf(HomeCache.popularList) }
     var searchResults by remember { mutableStateOf<List<AniListMedia>>(emptyList()) }
 
     var isSearching by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(!HomeCache.isLoaded) }
     var isSearchLoading by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
@@ -65,13 +67,22 @@ fun HomeScreen(
     val layoutParams = SubjectGridDefaults.coverLayoutParameters()
 
     LaunchedEffect(Unit) {
-        isLoading = true
-        val trendingRes = aniListClient.fetchTrending(1, 10)
-        val popularRes = aniListClient.fetchPopular(1, 30)
+        if (!HomeCache.isLoaded) {
+            isLoading = true
+            val trendingRes = aniListClient.fetchTrending(1, 10)
+            val popularRes = aniListClient.fetchPopular(1, 30)
 
-        trendingRes.onSuccess { trendingList = it }
-        popularRes.onSuccess { popularList = it }
-        isLoading = false
+            trendingRes.onSuccess {
+                trendingList = it
+                HomeCache.trendingList = it
+            }
+            popularRes.onSuccess {
+                popularList = it
+                HomeCache.popularList = it
+            }
+            HomeCache.isLoaded = true
+            isLoading = false
+        }
     }
 
     Scaffold(

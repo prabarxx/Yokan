@@ -1,10 +1,12 @@
 package app.yokan.ui.screens
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,17 +17,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Surface
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -46,7 +51,11 @@ import app.yokan.anilist.model.AniListMedia
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class TorrentFilter {
+    ALL, P1080, P720, SPANISH
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TorrentSelectionModal(
     anime: AniListMedia,
@@ -57,8 +66,9 @@ fun TorrentSelectionModal(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var isLoading by remember { mutableStateOf(true) }
-    var torrents by remember { mutableStateOf<List<NyaaTorrent>>(emptyList()) }
+    var allTorrents by remember { mutableStateOf<List<NyaaTorrent>>(emptyList()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var activeFilter by remember { mutableStateOf(TorrentFilter.ALL) }
 
     LaunchedEffect(anime.id, episodeNumber) {
         isLoading = true
@@ -67,7 +77,7 @@ fun TorrentSelectionModal(
         val result = searchEngine.search(titleToSearch, episodeNumber)
         result.fold(
             onSuccess = {
-                torrents = it
+                allTorrents = it
                 isLoading = false
             },
             onFailure = {
@@ -77,30 +87,40 @@ fun TorrentSelectionModal(
         )
     }
 
+    val filteredTorrents = remember(allTorrents, activeFilter) {
+        when (activeFilter) {
+            TorrentFilter.ALL -> allTorrents
+            TorrentFilter.P1080 -> allTorrents.filter { it.quality.contains("1080", ignoreCase = true) }
+            TorrentFilter.P720 -> allTorrents.filter { it.quality.contains("720", ignoreCase = true) }
+            TorrentFilter.SPANISH -> allTorrents.filter { it.isSpanishOrMulti }
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
-            // Cabecera
+            // Header estilo Animeko
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Episodio $episodeNumber - Fuentes Torrent",
+                        text = "Seleccionar fuente de video",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = anime.title.displayTitle,
+                        text = "Episodio $episodeNumber • ${anime.title.displayTitle}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -112,22 +132,56 @@ fun TorrentSelectionModal(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            // Filtros rápidos estilo Animeko
+            if (allTorrents.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = activeFilter == TorrentFilter.ALL,
+                        onClick = { activeFilter = TorrentFilter.ALL },
+                        label = { Text("Todos (${allTorrents.size})", fontSize = 12.sp) }
+                    )
+                    FilterChip(
+                        selected = activeFilter == TorrentFilter.SPANISH,
+                        onClick = { activeFilter = TorrentFilter.SPANISH },
+                        label = { Text("Sub Español", fontSize = 12.sp) }
+                    )
+                    FilterChip(
+                        selected = activeFilter == TorrentFilter.P1080,
+                        onClick = { activeFilter = TorrentFilter.P1080 },
+                        label = { Text("1080p", fontSize = 12.sp) }
+                    )
+                    FilterChip(
+                        selected = activeFilter == TorrentFilter.P720,
+                        onClick = { activeFilter = TorrentFilter.P720 },
+                        label = { Text("720p", fontSize = 12.sp) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             when {
                 isLoading -> {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
+                            .height(240.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             CircularProgressIndicator()
-                            Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = "Buscando torrents con subtítulos en español...",
+                                text = "Buscando torrents en AnimeTosho & Nyaa...",
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -139,13 +193,15 @@ fun TorrentSelectionModal(
                             .height(200.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Icon(
                                 Icons.Rounded.Warning,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.error,
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = errorMessage.orEmpty(),
                                 color = MaterialTheme.colorScheme.error,
@@ -153,7 +209,7 @@ fun TorrentSelectionModal(
                         }
                     }
                 }
-                torrents.isEmpty() -> {
+                filteredTorrents.isEmpty() -> {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -161,7 +217,11 @@ fun TorrentSelectionModal(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "No se encontraron torrents disponibles para este episodio.",
+                            text = if (activeFilter != TorrentFilter.ALL) {
+                                "No hay torrents para este filtro."
+                            } else {
+                                "No se encontraron torrents disponibles para este episodio."
+                            },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -170,11 +230,11 @@ fun TorrentSelectionModal(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(400.dp),
+                            .height(450.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(torrents) { torrent ->
-                            TorrentItemRow(
+                        items(filteredTorrents) { torrent ->
+                            AnimekoTorrentCard(
                                 torrent = torrent,
                                 onClick = { onTorrentSelect(torrent) }
                             )
@@ -182,108 +242,173 @@ fun TorrentSelectionModal(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
+/**
+ * Card de Torrent con el diseño idéntico a Animeko (MediaSelectorItemLayout)
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TorrentItemRow(
+private fun AnimekoTorrentCard(
     torrent: NyaaTorrent,
     onClick: () -> Unit,
 ) {
-    Surface(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
         shape = RoundedCornerShape(12.dp),
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            // Badges superiores
-            Row(
+        Column(
+            modifier = Modifier.padding(14.dp)
+        ) {
+            // Título original del Torrent
+            ProvideTextStyle(MaterialTheme.typography.titleSmall) {
+                Text(
+                    text = torrent.title,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 18.sp,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Fila de chips estilo Animeko
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Badge de calidad
-                    Box(
-                        modifier = Modifier
-                            .background(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
+                // Sembradores (🌱)
+                AssistChip(
+                    onClick = onClick,
+                    label = {
                         Text(
-                            text = torrent.quality,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            text = "🌱 ${torrent.seeders}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
+                            color = if (torrent.seeders >= 5) {
+                                Color(0xFF4CAF50)
+                            } else if (torrent.seeders > 0) {
+                                Color(0xFFFF9800)
+                            } else {
+                                Color(0xFFF44336)
+                            }
                         )
-                    }
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (torrent.seeders >= 5) {
+                            Color(0xFF4CAF50).copy(alpha = 0.12f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        }
+                    ),
+                    border = null,
+                )
 
-                    Spacer(modifier = Modifier.width(6.dp))
+                // Tamaño
+                AssistChip(
+                    onClick = onClick,
+                    label = { Text(torrent.size, fontSize = 11.sp) },
+                    border = null,
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    )
+                )
 
-                    // Badge de idioma
-                    if (torrent.isSpanishOrMulti) {
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    color = Color(0xFFE65100),
-                                    shape = RoundedCornerShape(4.dp)
-                                )
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
+                // Calidad / Resolución
+                AssistChip(
+                    onClick = onClick,
+                    label = {
+                        Text(
+                            text = torrent.quality,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    border = null,
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                    )
+                )
+
+                // Subtítulos Español
+                if (torrent.isSpanishOrMulti) {
+                    AssistChip(
+                        onClick = onClick,
+                        label = {
                             Text(
-                                text = "Sub Español / Multi",
-                                color = Color.White,
+                                text = "Sub Español",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE65100),
                             )
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-
-                    // Peso del archivo
-                    Text(
-                        text = torrent.size,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        },
+                        border = null,
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color(0xFFFF9800).copy(alpha = 0.15f)
+                        )
                     )
                 }
 
-                // Sembradores (Seeders) en Verde
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .background(
-                                color = Color(torrent.seedersBadgeColor).copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = "↑ ${torrent.seeders} seeds",
-                            color = Color(torrent.seedersBadgeColor),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
+                // Fansub / Grupo extractor
+                val fansub = extractFansub(torrent.title)
+                if (fansub != null) {
+                    AssistChip(
+                        onClick = onClick,
+                        label = { Text(fansub, fontSize = 11.sp) },
+                        border = null,
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                         )
-                    }
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Nombre del torrent
-            Text(
-                text = torrent.title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // Fila inferior con fecha de publicación
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "⬇ ${torrent.leechers} leechers",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                )
+                Text(
+                    text = torrent.publishDate,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                )
+            }
         }
     }
+}
+
+private fun extractFansub(title: String): String? {
+    val trimmed = title.trim()
+    if (trimmed.startsWith("[") && trimmed.contains("]")) {
+        val group = trimmed.substringAfter("[").substringBefore("]").trim()
+        if (group.isNotBlank() && group.length <= 25) {
+            return group
+        }
+    }
+    return null
 }
