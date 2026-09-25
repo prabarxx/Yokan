@@ -3,20 +3,26 @@ package app.yokan.ui.screens
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,9 +32,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
@@ -38,33 +47,99 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import me.him188.ani.app.data.models.preference.DarkMode
 import me.him188.ani.app.platform.features.StreamType
 import me.him188.ani.app.platform.features.getComponentAccessorsImpl
 import me.him188.ani.app.platform.findActivity
 import me.him188.ani.app.torrent.api.files.FilePriority
+import me.him188.ani.app.ui.foundation.effects.DarkStatusBarAppearance
+import me.him188.ani.app.ui.foundation.effects.ScreenOnEffect
+import me.him188.ani.app.ui.foundation.icons.AniIcons
+import me.him188.ani.app.ui.foundation.icons.Forward85
+import me.him188.ani.app.ui.foundation.icons.Forward90
+import me.him188.ani.app.ui.foundation.navigation.BackDispatcher
+import me.him188.ani.app.ui.foundation.navigation.LocalBackDispatcher
+import me.him188.ani.app.ui.foundation.theme.AniTheme
 import me.him188.ani.app.videoplayer.media.LibassExoPlayerMediampPlayer
+import me.him188.ani.app.videoplayer.ui.ControllerVisibility
+import me.him188.ani.app.videoplayer.ui.PlaybackSpeedControllerState
+import me.him188.ani.app.videoplayer.ui.PlayerControllerState
+import me.him188.ani.app.videoplayer.ui.PlayerStatsOverlay
+import me.him188.ani.app.videoplayer.ui.VideoAspectRatioControllerState
+import me.him188.ani.app.videoplayer.ui.VideoLoadingIndicator
 import me.him188.ani.app.videoplayer.ui.VideoPlayer
 import me.him188.ani.app.videoplayer.ui.VideoScaffold
+import me.him188.ani.app.videoplayer.ui.gesture.GestureIndicatorState
 import me.him188.ani.app.videoplayer.ui.gesture.GestureLock
 import me.him188.ani.app.videoplayer.ui.gesture.LockableVideoGestureHost
 import me.him188.ani.app.videoplayer.ui.gesture.NoOpLevelController
+import me.him188.ani.app.videoplayer.ui.gesture.SwipeSeekerConfig
 import me.him188.ani.app.videoplayer.ui.gesture.asLevelController
+import me.him188.ani.app.videoplayer.ui.gesture.rememberGestureIndicatorState
 import me.him188.ani.app.videoplayer.ui.gesture.rememberSwipeSeekerState
+import me.him188.ani.app.videoplayer.ui.progress.AudioSwitcher
 import me.him188.ani.app.videoplayer.ui.progress.MediaProgressIndicatorText
 import me.him188.ani.app.videoplayer.ui.progress.MediaProgressSlider
 import me.him188.ani.app.videoplayer.ui.progress.PlayerControllerBar
 import me.him188.ani.app.videoplayer.ui.progress.PlayerControllerDefaults
+import me.him188.ani.app.videoplayer.ui.progress.SpeedSwitcher
+import me.him188.ani.app.videoplayer.ui.progress.SubtitleSwitcher
+import me.him188.ani.app.videoplayer.ui.progress.TouchSeekState
+import me.him188.ani.app.videoplayer.ui.progress.VideoAspectRatioSelector
 import me.him188.ani.app.videoplayer.ui.progress.rememberMediaProgressSliderState
+import me.him188.ani.app.videoplayer.ui.rememberAlwaysOnRequester
 import me.him188.ani.app.videoplayer.ui.rememberPlayerFullscreenState
+import me.him188.ani.app.videoplayer.ui.rememberPlayerStatsState
 import me.him188.ani.app.videoplayer.ui.rememberVideoControllerState
 import me.him188.ani.app.videoplayer.ui.top.PlayerTopBar
 import me.him188.ani.app.videoplayer.ui.top.SystemTime
 import me.him188.ani.utils.logging.error
 import me.him188.ani.utils.logging.info
 import me.him188.ani.utils.logging.logger
+import org.openani.mediamp.features.PlaybackSpeed
+import org.openani.mediamp.features.VideoAspectRatio
+import org.openani.mediamp.features.audioTracks
+import org.openani.mediamp.features.subtitleTracks
+import org.openani.mediamp.togglePlayWhenReady
 import kotlin.time.Duration.Companion.seconds
 
 private val logger = logger("VideoPlayerScreen")
+
+@Composable
+private fun rememberPlayerTouchSeekState(
+    controllerState: PlayerControllerState,
+    indicatorState: GestureIndicatorState,
+    swipeSeekerConfig: SwipeSeekerConfig = SwipeSeekerConfig.Default,
+): TouchSeekState {
+    val density = LocalDensity.current
+    return remember(controllerState, indicatorState, swipeSeekerConfig, density) {
+        val controllerRequester = Any()
+        var indicatorTicket: Int? = null
+        fun stopCancellationIndicator() {
+            indicatorTicket?.let(indicatorState::stopSeekCancellation)
+            indicatorTicket = null
+        }
+        TouchSeekState(
+            swipeSeekerConfig = swipeSeekerConfig,
+            density = density,
+            onStateChanged = { state ->
+                when (state) {
+                    TouchSeekState.State.Idle -> {
+                        controllerState.cancelRequestInlineProgressSlider(controllerRequester)
+                        stopCancellationIndicator()
+                    }
+                    TouchSeekState.State.Seeking -> {
+                        controllerState.setRequestInlineProgressSlider(controllerRequester)
+                        stopCancellationIndicator()
+                    }
+                    TouchSeekState.State.Cancelling -> {
+                        indicatorTicket = indicatorState.startSeekCancellation()
+                    }
+                }
+            },
+        )
+    }
+}
 
 @Composable
 fun VideoPlayerScreen(
@@ -97,6 +172,7 @@ fun VideoPlayerScreen(
 
     var isFullscreen by remember { mutableStateOf(true) }
     var isLocked by remember { mutableStateOf(false) }
+    var showPlayerStats by remember { mutableStateOf(false) }
 
     val fullscreenState = rememberPlayerFullscreenState(
         isFullscreen = { isFullscreen },
@@ -110,6 +186,15 @@ fun VideoPlayerScreen(
         }
     )
 
+    val backDispatcher = remember(onBack, fullscreenState, isFullscreen) {
+        BackDispatcher {
+            if (isFullscreen) {
+                fullscreenState.request(false)
+            }
+            onBack()
+        }
+    }
+
     // Force landscape on start, restore on exit
     DisposableEffect(activity) {
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -121,11 +206,20 @@ fun VideoPlayerScreen(
     }
 
     BackHandler {
-        if (isFullscreen) {
-            fullscreenState.request(false)
-        }
-        onBack()
+        backDispatcher.onBackPressed()
     }
+
+    val playWhenReady by remember(player) { player.state.map { it.playWhenReady } }
+        .collectAsStateWithLifecycle(false)
+
+    val isBuffering by remember(player) { player.state.map { it.isBuffering } }
+        .collectAsStateWithLifecycle(false)
+
+    if (playWhenReady) {
+        ScreenOnEffect()
+    }
+
+    DarkStatusBarAppearance()
 
     LaunchedEffect(torrent.magnetUrl) {
         loadingStatus = "Conectando con la red BitTorrent..."
@@ -207,160 +301,267 @@ fun VideoPlayerScreen(
         onPreviewFinished = { player.seekTo(it) },
     )
 
-    val playWhenReady by remember(player) { player.state.map { it.playWhenReady } }
-        .collectAsState(false)
+    val indicatorState = rememberGestureIndicatorState()
+    val swipeSeekerConfig = SwipeSeekerConfig.Default
+    val touchSeekState = rememberPlayerTouchSeekState(
+        controllerState = controllerState,
+        indicatorState = indicatorState,
+        swipeSeekerConfig = swipeSeekerConfig,
+    )
 
-    val isBuffering by remember(player) { player.state.map { it.isBuffering } }
-        .collectAsState(false)
+    val playbackSpeed = remember(player) { player.features[PlaybackSpeed] }
+    val playbackSpeedControllerState = remember(playbackSpeed, coroutineScope) {
+        playbackSpeed?.let {
+            PlaybackSpeedControllerState(it, scope = coroutineScope)
+        }
+    }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        VideoScaffold(
-            expanded = isFullscreen,
-            modifier = Modifier.fillMaxSize(),
-            maintainAspectRatio = false,
-            controllerState = controllerState,
-            gestureLocked = isLocked,
-            topBar = {
-                PlayerTopBar(
-                    title = {
-                        Text(
-                            text = torrent.title,
-                            maxLines = 1,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
+    val videoAspectRatio = remember(player) { player.features[VideoAspectRatio] }
+    val videoAspectRatioControllerState = remember(videoAspectRatio, coroutineScope) {
+        videoAspectRatio?.let {
+            VideoAspectRatioControllerState(it, scope = coroutineScope)
+        }
+    }
+
+    val playerStats by rememberPlayerStatsState(player)
+
+    AniTheme(darkModeOverride = DarkMode.DARK) {
+        CompositionLocalProvider(
+            LocalBackDispatcher provides backDispatcher,
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                VideoScaffold(
+                    expanded = isFullscreen,
+                    modifier = Modifier.fillMaxSize(),
+                    maintainAspectRatio = false,
+                    controllerState = controllerState,
+                    gestureLocked = isLocked,
+                    topBar = {
+                        PlayerTopBar(
+                            title = {
+                                Text(
+                                    text = torrent.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            },
+                            actions = {
+                                IconButton(onClick = { player.skip(85_000L) }) {
+                                    Icon(AniIcons.Forward85, contentDescription = "+85s", tint = Color.White)
+                                }
+                                IconButton(onClick = { player.skip(90_000L) }) {
+                                    Icon(AniIcons.Forward90, contentDescription = "+90s", tint = Color.White)
+                                }
+                                IconButton(onClick = { showPlayerStats = !showPlayerStats }) {
+                                    Icon(
+                                        Icons.Outlined.Analytics,
+                                        contentDescription = "Estadísticas",
+                                        tint = if (showPlayerStats) MaterialTheme.colorScheme.primary else Color.White,
+                                    )
+                                }
+                            }
                         )
                     },
-                )
-            },
-            centerOverlay = {
-                SystemTime()
-            },
-            video = {
-                VideoPlayer(
-                    player = player,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            },
-            gestureHost = {
-                val swipeSeekerState = rememberSwipeSeekerState(
-                    screenWidthPx = constraints.maxWidth,
-                ) { offsetSeconds ->
-                    player.skip(offsetSeconds * 1000L)
-                }
-
-                LockableVideoGestureHost(
-                    controllerState = controllerState,
-                    seekerState = swipeSeekerState,
-                    progressSliderState = progressSliderState,
-                    playerState = player,
-                    locked = isLocked,
-                    enableSwipeToSeek = true,
-                    audioController = audioController,
-                    brightnessController = brightnessController,
-                    playbackSpeedControllerState = null,
-                    fullscreenState = fullscreenState,
-                    modifier = Modifier.fillMaxSize(),
-                    onTogglePauseResume = {
-                        if (player.state.value.playWhenReady) {
-                            player.pause()
-                        } else {
-                            player.play()
+                    centerOverlay = {
+                        if (isFullscreen) {
+                            SystemTime()
                         }
                     },
-                )
-            },
-            gestureLock = {
-                GestureLock(
-                    isLocked = isLocked,
-                    onClick = { isLocked = !isLocked },
-                )
-            },
-            floatingMessage = {
-                val status = loadingStatus
-                if (isBuffering || status != null) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.padding(24.dp)
-                        ) {
-                            CircularProgressIndicator(color = Color.White)
-                            if (status != null) {
-                                Text(
-                                    text = status,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Medium,
-                                    textAlign = TextAlign.Center,
-                                )
+                    video = {
+                        VideoPlayer(
+                            player = player,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    },
+                    gestureHost = {
+                        val swipeSeekerState = rememberSwipeSeekerState(
+                            screenWidthPx = constraints.maxWidth,
+                            swipeSeekerConfig = swipeSeekerConfig,
+                        ) { offsetSeconds ->
+                            player.skip(offsetSeconds * 1000L)
+                        }
+
+                        val videoPropertiesState by player.mediaProperties.collectAsState(null)
+                        val enableSwipeToSeek by remember {
+                            derivedStateOf {
+                                videoPropertiesState?.let { it.durationMillis != 0L } == true
                             }
                         }
-                    }
-                }
-            },
-            bottomBar = {
-                PlayerControllerBar(
-                    startActions = {
-                        PlayerControllerDefaults.PlaybackIcon(
-                            isPlaying = { playWhenReady },
-                            onClick = {
-                                if (playWhenReady) player.pause() else player.play()
-                            },
-                        )
-                    },
-                    progressIndicator = {
-                        MediaProgressIndicatorText(
-                            state = progressSliderState,
-                        )
-                    },
-                    progressSlider = {
-                        MediaProgressSlider(
-                            state = progressSliderState,
-                            cacheProgressInfoFlow = { null },
-                        )
-                    },
-                    danmakuEditor = {},
-                    endActions = {
-                        PlayerControllerDefaults.FullscreenIcon(
-                            fullscreenState = fullscreenState,
-                        )
-                    },
-                    expanded = isFullscreen,
-                )
-            }
-        )
 
-        // Diálogo / Pantalla de error amigable
-        if (errorMessage != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.92f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.padding(32.dp)
-                ) {
-                    Text(
-                        text = "Error al reproducir",
-                        color = Color(0xFFFF5252),
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = errorMessage ?: "",
-                        color = Color.White,
-                        textAlign = TextAlign.Center,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Button(
-                        onClick = onBack,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
+                        LockableVideoGestureHost(
+                            controllerState = controllerState,
+                            seekerState = swipeSeekerState,
+                            progressSliderState = progressSliderState,
+                            playerState = player,
+                            locked = isLocked,
+                            enableSwipeToSeek = enableSwipeToSeek,
+                            audioController = audioController,
+                            brightnessController = brightnessController,
+                            playbackSpeedControllerState = playbackSpeedControllerState,
+                            fullscreenState = fullscreenState,
+                            modifier = Modifier.fillMaxSize(),
+                            onTogglePauseResume = {
+                                if (player.state.value.playWhenReady) {
+                                    coroutineScope.launch {
+                                        indicatorState.showPausedLong()
+                                    }
+                                } else {
+                                    coroutineScope.launch {
+                                        indicatorState.showResumedLong()
+                                    }
+                                }
+                                player.togglePlayWhenReady()
+                            },
+                            onToggleDanmaku = {},
+                            onTogglePlayerStats = {
+                                showPlayerStats = !showPlayerStats
+                            },
+                            gestureIndicatorState = indicatorState,
+                            fastForwardSpeed = 3f,
                         )
+                    },
+                    gestureLock = {
+                        if (isFullscreen) {
+                            GestureLock(
+                                isLocked = isLocked,
+                                onClick = { isLocked = !isLocked },
+                            )
+                        }
+                    },
+                    playerStatsOverlay = {
+                        if (showPlayerStats) {
+                            PlayerStatsOverlay(playerStats)
+                        }
+                    },
+                    floatingMessage = {
+                        val status = loadingStatus
+                        if (isBuffering || status != null) {
+                            VideoLoadingIndicator(
+                                showProgress = true,
+                                text = {
+                                    Text(
+                                        text = status ?: "Cargando búfer de video...",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                },
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                    },
+                    bottomBar = {
+                        PlayerControllerBar(
+                            startActions = {
+                                PlayerControllerDefaults.PlaybackIcon(
+                                    isPlaying = { playWhenReady },
+                                    onClick = { player.togglePlayWhenReady() },
+                                )
+                            },
+                            progressIndicator = {
+                                MediaProgressIndicatorText(
+                                    state = progressSliderState,
+                                    playbackSpeedState = playbackSpeedControllerState,
+                                )
+                            },
+                            progressSlider = {
+                                MediaProgressSlider(
+                                    state = progressSliderState,
+                                    cacheProgressInfoFlow = { null },
+                                    showPreviewTimeTextOnThumb = isFullscreen,
+                                    framePreview = null,
+                                    showFramePreviewInPopup = isFullscreen,
+                                    touchSeekState = touchSeekState,
+                                )
+                            },
+                            danmakuEditor = {},
+                            endActions = {
+                                if (isFullscreen) {
+                                    // Selector de pistas de audio estilo Animeko
+                                    player.audioTracks?.let {
+                                        PlayerControllerDefaults.AudioSwitcher(it)
+                                    }
+
+                                    // Selector de subtítulos estilo Animeko
+                                    player.subtitleTracks?.let {
+                                        PlayerControllerDefaults.SubtitleSwitcher(it)
+                                    }
+
+                                    // Selector de proporción de aspecto (Fit, Stretch, Crop)
+                                    val videoAspectRatioAlwaysOnRequester =
+                                        rememberAlwaysOnRequester(controllerState, "videoAspectRatioSelector")
+                                    videoAspectRatioControllerState?.also { controller ->
+                                        PlayerControllerDefaults.VideoAspectRatioSelector(controller) {
+                                            if (it) {
+                                                videoAspectRatioAlwaysOnRequester.request()
+                                            } else {
+                                                videoAspectRatioAlwaysOnRequester.cancelRequest()
+                                            }
+                                        }
+                                    }
+
+                                    // Selector de velocidad de reproducción (0.5x .. 2.5x)
+                                    val playbackSpeedAlwaysOnRequester =
+                                        rememberAlwaysOnRequester(controllerState, "speedSwitcher")
+                                    playbackSpeedControllerState?.also { controller ->
+                                        PlayerControllerDefaults.SpeedSwitcher(controller) {
+                                            if (it) {
+                                                playbackSpeedAlwaysOnRequester.request()
+                                            } else {
+                                                playbackSpeedAlwaysOnRequester.cancelRequest()
+                                            }
+                                        }
+                                    }
+                                }
+
+                                PlayerControllerDefaults.FullscreenIcon(
+                                    fullscreenState = fullscreenState,
+                                )
+                            },
+                            expanded = isFullscreen,
+                            sliderOnly = controllerState.visibility == ControllerVisibility.InlineSliderOnly,
+                        )
+                    }
+                )
+
+                // Diálogo de error amigable
+                if (errorMessage != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.92f)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("Volver")
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(32.dp)
+                        ) {
+                            Text(
+                                text = "Error al reproducir",
+                                color = Color(0xFFFF5252),
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = errorMessage ?: "",
+                                color = Color.White,
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Button(
+                                onClick = onBack,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("Volver")
+                            }
+                        }
                     }
                 }
             }

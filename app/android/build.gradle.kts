@@ -116,6 +116,8 @@ android {
 }
 
 dependencies {
+    implementation(projects.app.shared.appPlatform)
+    implementation(projects.app.shared.appLang)
     implementation(projects.app.shared.uiFoundation)
     implementation(projects.app.shared.uiAdaptive)
     implementation(projects.app.shared.videoPlayer)
