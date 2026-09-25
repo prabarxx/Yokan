@@ -11,7 +11,7 @@ on:
       tag_name:
         description: 'Nombre del tag o versión de release (ej. v1.0.6)'
         required: false
-        default: 'v1.0.8'
+        default: 'v1.0.9'
 
 permissions:
   contents: write
@@ -113,7 +113,7 @@ jobs:
           elif [ -n "${{ inputs.tag_name }}" ]; then
             echo "val=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "val=v1.0.8" >> "$GITHUB_OUTPUT"
+            echo "val=v1.0.9" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish GitHub Release
