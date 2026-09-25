@@ -250,10 +250,10 @@ fun AnimeDetailsScreen(
                             }
                         }
 
-                        val seasonYear = listOfNotNull(anime.season, anime.seasonYear?.toString()).joinToString(" ")
-                        if (seasonYear.isNotBlank()) {
+                        val epCount = anime.effectiveEpisodesCount
+                        if (epCount > 0) {
                             Text(
-                                text = seasonYear,
+                                text = "$epCount episodios",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.7f),
                                 modifier = Modifier.padding(top = 4.dp)

@@ -81,7 +81,7 @@ fun VideoPlayerScreen(
 
     val coroutineExceptionHandler = remember {
         CoroutineExceptionHandler { _, throwable ->
-            logger.error(throwable) { "Error inesperado en corrutina del reproductor" }
+            logger.error("Error inesperado en corrutina del reproductor: ${throwable.message}", throwable)
             errorMessage = throwable.localizedMessage ?: "Error desconocido en el reproductor"
             loadingStatus = null
         }
