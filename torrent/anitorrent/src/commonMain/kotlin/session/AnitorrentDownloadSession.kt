@@ -176,11 +176,11 @@ class AnitorrentDownloadSession(
             TorrentDownloadController(
                 pieces,
                 prioritizer,
-                // Ventana ampliada a 32MB (12..64 piezas) para saturar múltiples sembradores en paralelo
-                windowSize = (32 * 1024 * 1024 / pieceSize).toInt().coerceIn(12, 64),
-                headerSize = 4 * 1024 * 1024,
-                footerSize = 2 * 1024 * 1024,
-                possibleFooterSize = 8 * 1024 * 1024,
+                // Ventana concentrada de 16MB (8..32 piezas) para saturar conexiones en el punto de reproducción
+                windowSize = (16 * 1024 * 1024 / pieceSize).toInt().coerceIn(8, 32),
+                headerSize = 16 * 1024 * 1024,
+                footerSize = 16 * 1024 * 1024,
+                possibleFooterSize = 32 * 1024 * 1024,
             )
         }
 
@@ -255,15 +255,19 @@ class AnitorrentDownloadSession(
             )
         }
 
+        @Volatile
+        var activeUrgentPiece: Int? = null
+
         fun updatePieceDeadlinesForSeek(requested: Piece) {
             with(pieces) {
-                logger.info { "[TorrentDownloadControl] $torrentId: Requesting immediate deadline 0 for piece ${requested.pieceIndex}" }
+                logger.info { "[TorrentDownloadControl] $torrentId: Requesting immediate deadline 0 for urgent piece ${requested.pieceIndex}" }
+                activeUrgentPiece = requested.pieceIndex
                 // Deadline 0 indica a libtorrent urgencia inmediata (máxima prioridad)
                 handle.setPieceDeadline(requested.pieceIndex, 0)
                 // Asignar prioridades inmediatas a las siguientes piezas consecutivas para amortiguar la reproducción continua
-                val nextCount = minOf(8, endPieceIndex - requested.pieceIndex)
+                val nextCount = minOf(4, endPieceIndex - requested.pieceIndex)
                 for (i in 1 until nextCount) {
-                    handle.setPieceDeadline(requested.pieceIndex + i, i * 200)
+                    handle.setPieceDeadline(requested.pieceIndex + i, i * 100)
                 }
 
                 if (!controller.isDownloading(requested.pieceIndex)) {
@@ -445,6 +449,9 @@ class AnitorrentDownloadSession(
             info.allPiecesInTorrent.getByPieceIndex(pieceIndex).state = PieceState.FINISHED
         }
         for (file in openFiles.value) {
+            if (file.entry.activeUrgentPiece == pieceIndex) {
+                file.entry.activeUrgentPiece = null
+            }
             if (pieceIndex in file.entry.pieceIndexRange) {
                 file.entry.controller.onPieceDownloaded(pieceIndex)
             }
@@ -573,22 +580,30 @@ class AnitorrentDownloadSession(
                     logger.debug { "[$handleId][TorrentDownloadControl] Prioritizing pieces: ${highPriorityPieces + normalPriorityPieces}" }
                 }
 
+                val urgentPiece = openFiles.value.firstNotNullOfOrNull { it.entry.activeUrgentPiece }
+                if (urgentPiece != null) {
+                    handle.setPieceDeadline(urgentPiece, 0)
+                    for (i in 1..3) {
+                        handle.setPieceDeadline(urgentPiece + i, i * 100)
+                    }
+                }
+
                 if (highPriorityPieces.isNotEmpty()) {
                     // Piezas de cabecera y cola (metadatos / cues): pieza 0 con urgencia inmediata (deadline 0)
-                    highPriorityPieces.forEachIndexed { index, pieceIndex ->
-                        val deadline = if (index == 0) 0 else index * 150
+                    highPriorityPieces.filter { it != urgentPiece }.forEachIndexed { index, pieceIndex ->
+                        val deadline = if (urgentPiece == null && index == 0) 0 else (index + 1) * 150
                         handle.setPieceDeadline(pieceIndex, deadline)
                     }
 
                     // Piezas normales consecutivas del reproductor con intervalos rápidos para saturar sembradores
-                    val startOffset = highPriorityPieces.size * 150
-                    normalPriorityPieces.forEachIndexed { index, pieceIndex ->
+                    val startOffset = (highPriorityPieces.size + 1) * 150
+                    normalPriorityPieces.filter { it != urgentPiece }.forEachIndexed { index, pieceIndex ->
                         handle.setPieceDeadline(pieceIndex, startOffset + (index + 1) * 250)
                     }
                 } else {
-                    // Metadatos ya completos, la primera pieza de reproducción es inmediata (0ms)
-                    normalPriorityPieces.forEachIndexed { index, pieceIndex ->
-                        val deadline = if (index == 0) 0 else index * 200
+                    // Metadatos ya completos, la primera pieza de reproducción es inmediata si no hay pieza urgente activa
+                    normalPriorityPieces.filter { it != urgentPiece }.forEachIndexed { index, pieceIndex ->
+                        val deadline = if (urgentPiece == null && index == 0) 0 else (index + 1) * 200
                         handle.setPieceDeadline(pieceIndex, deadline)
                     }
                 }

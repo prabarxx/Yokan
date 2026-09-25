@@ -41,7 +41,7 @@ class VideoDataDataSource(
         @JvmStatic
         private val logger = logger<VideoDataDataSource>()
         private const val ENABLE_READ_LOG = false
-        private const val ENABLE_TRACE_LOG = false
+        private const val ENABLE_TRACE_LOG = true
     }
 
     private var uri: Uri? = null
@@ -93,9 +93,9 @@ class VideoDataDataSource(
         if (ENABLE_TRACE_LOG) logger.info { "torrentLength = $torrentLength" }
 
         if (dataSpec.position >= torrentLength) {
-            if (ENABLE_TRACE_LOG) logger.info { "dataSpec.position ${dataSpec.position} > torrentLength $torrentLength" }
+            if (ENABLE_TRACE_LOG) logger.warn { "dataSpec.position ${dataSpec.position} >= torrentLength $torrentLength" }
         } else {
-            if (dataSpec.position != -1L && dataSpec.position != 0L) {
+            if (dataSpec.position >= 0L) {
                 if (ENABLE_TRACE_LOG) logger.info { "Seeking to ${dataSpec.position}" }
                 runBlocking { file.seekTo(dataSpec.position) }
             }
@@ -104,7 +104,12 @@ class VideoDataDataSource(
         }
 
         transferStarted(dataSpec)
-        return file.bytesRemaining
+        val remaining = file.bytesRemaining
+        return if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
+            dataSpec.length
+        } else {
+            remaining
+        }
     }
 
     override fun getUri(): Uri? = uri

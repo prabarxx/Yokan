@@ -37,9 +37,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
+import org.openani.mediamp.MediaStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.NonCancellable
@@ -220,6 +223,40 @@ fun VideoPlayerScreen(
 
     DarkStatusBarAppearance()
 
+    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoMediampPlayer?.impl }
+    DisposableEffect(exoPlayer) {
+        if (exoPlayer == null) return@DisposableEffect onDispose {}
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                logger.error("ExoPlayer error: ${error.message} (code=${error.errorCode})", error)
+                errorMessage = "Error de reproducción: ${error.localizedMessage ?: error.message}"
+                loadingStatus = null
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                logger.info("ExoPlayer playbackState changed: $playbackState (READY=3, BUFFERING=2, ENDED=4, IDLE=1)")
+                if (playbackState == Player.STATE_READY) {
+                    loadingStatus = null
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+        }
+    }
+
+    LaunchedEffect(player) {
+        player.state.collect { state ->
+            val status = state.mediaStatus
+            if (status is MediaStatus.Error) {
+                logger.error("Player MediaStatus.Error: ${status.cause?.message}", status.cause)
+                errorMessage = "Error en el reproductor: ${status.cause?.localizedMessage ?: "Error de decodificación"}"
+                loadingStatus = null
+            }
+        }
+    }
+
     LaunchedEffect(torrent.magnetUrl) {
         loadingStatus = "Conectando con la red BitTorrent..."
         errorMessage = null
@@ -285,6 +322,7 @@ fun VideoPlayerScreen(
 
             loadingStatus = "Iniciando búfer de video..."
             player.setMediaData(mediaData, playWhenReady = true)
+            runCatching { player.play() }
             loadingStatus = null
         } catch (e: CancellationException) {
             throw e

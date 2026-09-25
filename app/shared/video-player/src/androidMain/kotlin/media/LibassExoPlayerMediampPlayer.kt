@@ -339,7 +339,11 @@ private class RoutingDataSource(
 
     override fun open(dataSpec: DataSpec): Long {
         check(activeDataSource == null) { "Data source is already open" }
-        val dataSource = if (dataSpec.uri.toString() == mediaUri) {
+        val isMedia = dataSpec.uri.scheme == "torrent" ||
+                dataSpec.uri.toString() == mediaUri ||
+                dataSpec.uri == Uri.parse(mediaUri) ||
+                dataSpec.uri.path == Uri.parse(mediaUri).path
+        val dataSource = if (isMedia) {
             mediaDataSourceFactory.createDataSource()
         } else {
             fallbackDataSourceFactory.createDataSource()
