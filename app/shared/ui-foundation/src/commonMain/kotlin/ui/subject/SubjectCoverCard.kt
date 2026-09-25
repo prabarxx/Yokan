@@ -45,31 +45,7 @@ fun SubjectCoverCard(
         modifier = modifier.placeholder(isPlaceholder, shape = shape),
         maskShape = shape,
         brushLayerModifier = brushLayerModifier,
-        overlay = {
-            if (score != null && score > 0) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .background(
-                            color = when {
-                                score >= 75 -> Color(0xFF4CAF50).copy(alpha = 0.9f)
-                                score >= 60 -> Color(0xFFFF9800).copy(alpha = 0.9f)
-                                else -> Color(0xFFF44336).copy(alpha = 0.9f)
-                            },
-                            shape = RoundedCornerShape(4.dp)
-                        )
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = "$score%",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-        },
+        overlay = {},
     ) {
         if (!isPlaceholder) {
             val imageContent = @Composable {

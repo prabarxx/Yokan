@@ -16,7 +16,6 @@ fun AnimePosterCard(
         image = anime.coverImage?.bestQualityUrl,
         isPlaceholder = false,
         onClick = onClick,
-        score = anime.averageScore,
         modifier = modifier,
     )
 }

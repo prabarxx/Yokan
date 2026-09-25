@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
@@ -25,6 +26,7 @@ import app.yokan.anilist.model.AniListMedia
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.ui.screens.AnimeDetailsScreen
+import app.yokan.ui.screens.CacheManagementScreen
 import app.yokan.ui.screens.HomeScreen
 import app.yokan.ui.screens.TorrentSelectionModal
 import app.yokan.ui.screens.VideoPlayerScreen
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
 
 private sealed interface Screen {
     data object Home : Screen
+    data object Cache : Screen
     data class Details(val anime: AniListMedia) : Screen
     data class Player(val torrent: NyaaTorrent, val previousScreen: Screen) : Screen
 }
@@ -94,6 +97,10 @@ private fun YokanApp(
         } else {
             when (val screen = currentScreen) {
                 is Screen.Home -> Unit
+                is Screen.Cache -> {
+                    selectedNavTab = 0
+                    currentScreen = Screen.Home
+                }
                 is Screen.Details -> currentScreen = Screen.Home
                 is Screen.Player -> currentScreen = screen.previousScreen
             }
@@ -130,6 +137,15 @@ private fun YokanApp(
                         icon = { Icon(Icons.Rounded.Search, contentDescription = "Buscar") },
                         label = { Text("Buscar") },
                     )
+                    item(
+                        selected = selectedNavTab == 2 && currentScreen is Screen.Cache,
+                        onClick = {
+                            selectedNavTab = 2
+                            currentScreen = Screen.Cache
+                        },
+                        icon = { Icon(Icons.Rounded.DownloadDone, contentDescription = "Caché") },
+                        label = { Text("Caché") },
+                    )
                 }
             }
         ) {
@@ -140,6 +156,13 @@ private fun YokanApp(
                         onAnimeClick = { anime ->
                             currentScreen = Screen.Details(anime)
                         },
+                    )
+                }
+                is Screen.Cache -> {
+                    CacheManagementScreen(
+                        onPlayTorrent = { torrent ->
+                            currentScreen = Screen.Player(torrent = torrent, previousScreen = Screen.Cache)
+                        }
                     )
                 }
                 is Screen.Details -> {

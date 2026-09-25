@@ -320,6 +320,15 @@ fun VideoPlayerScreen(
             )
             currentMediaData = mediaData
 
+            runCatching {
+                app.yokan.media.CacheStorageManager.getInstance(context).recordCachedTorrent(
+                    title = targetFile.fileName.ifBlank { torrent.title },
+                    magnetUrl = torrent.magnetUrl,
+                    torrentUrl = torrent.torrentUrl,
+                    fileSizeBytes = targetFile.length,
+                )
+            }
+
             loadingStatus = "Iniciando búfer de video..."
             player.setMediaData(mediaData, playWhenReady = true)
             runCatching { player.play() }
