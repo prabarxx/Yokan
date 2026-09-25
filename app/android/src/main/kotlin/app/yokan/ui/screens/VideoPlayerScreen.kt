@@ -99,6 +99,7 @@ import me.him188.ani.app.videoplayer.ui.top.SystemTime
 import me.him188.ani.utils.logging.error
 import me.him188.ani.utils.logging.info
 import me.him188.ani.utils.logging.logger
+import me.him188.ani.utils.logging.warn
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.audioTracks
@@ -228,7 +229,17 @@ fun VideoPlayerScreen(
             val downloader = torrentManager.downloader
 
             loadingStatus = "Obteniendo metadatos del torrent..."
-            val encodedInfo = downloader.fetchTorrent(torrent.magnetUrl)
+            val directTorrentUrl = torrent.torrentUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+            val encodedInfo = if (directTorrentUrl != null) {
+                runCatching {
+                    downloader.fetchTorrent(directTorrentUrl)
+                }.getOrElse { error ->
+                    logger.warn("Falló descarga directa de .torrent HTTP (${error.message}), recurriendo a magnet...")
+                    downloader.fetchTorrent(torrent.magnetUrl)
+                }
+            } else {
+                downloader.fetchTorrent(torrent.magnetUrl)
+            }
 
             loadingStatus = "Conectando con peers..."
             val session = downloader.startDownload(encodedInfo)

@@ -73,8 +73,11 @@ fun TorrentSelectionModal(
     LaunchedEffect(anime.id, episodeNumber) {
         isLoading = true
         errorMessage = null
-        val titleToSearch = anime.title.english?.takeIf { it.isNotBlank() } ?: anime.title.romaji
-        val result = searchEngine.search(titleToSearch, episodeNumber)
+        val result = searchEngine.search(
+            romajiTitle = anime.title.romaji,
+            englishTitle = anime.title.english,
+            episodeNumber = episodeNumber,
+        )
         result.fold(
             onSuccess = {
                 allTorrents = it
