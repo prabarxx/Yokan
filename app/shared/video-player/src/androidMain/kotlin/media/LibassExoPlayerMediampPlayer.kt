@@ -72,7 +72,7 @@ import kotlin.time.Duration.Companion.milliseconds
 class LibassExoPlayerMediampPlayer private constructor(
     parentCoroutineContext: CoroutineContext,
     private val pipeline: LibassMediaSourcePipeline,
-    internal val exoMediampPlayer: ExoPlayerMediampPlayer,
+    val exoMediampPlayer: ExoPlayerMediampPlayer,
 ) : MediampPlayer by exoMediampPlayer {
     constructor(
         context: Context,
@@ -98,7 +98,7 @@ class LibassExoPlayerMediampPlayer private constructor(
 
     internal val assHandler: AssHandler get() = pipeline.assHandler
 
-    private val exoPlayer: ExoPlayer get() = exoMediampPlayer.impl
+    val exoPlayer: ExoPlayer get() = exoMediampPlayer.impl
     private val backgroundScope = CoroutineScope(
         parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
     )

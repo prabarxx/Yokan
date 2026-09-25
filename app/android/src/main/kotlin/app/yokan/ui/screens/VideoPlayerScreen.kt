@@ -223,7 +223,7 @@ fun VideoPlayerScreen(
 
     DarkStatusBarAppearance()
 
-    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoMediampPlayer?.impl }
+    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
     DisposableEffect(exoPlayer) {
         if (exoPlayer == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
@@ -250,8 +250,8 @@ fun VideoPlayerScreen(
         player.state.collect { state ->
             val status = state.mediaStatus
             if (status is MediaStatus.Error) {
-                logger.error("Player MediaStatus.Error: ${status.cause?.message}", status.cause)
-                errorMessage = "Error en el reproductor: ${status.cause?.localizedMessage ?: "Error de decodificación"}"
+                logger.error("Player MediaStatus.Error: ${status.error.message}", status.error)
+                errorMessage = "Error en el reproductor: ${status.error.localizedMessage ?: "Error de decodificación"}"
                 loadingStatus = null
             }
         }
