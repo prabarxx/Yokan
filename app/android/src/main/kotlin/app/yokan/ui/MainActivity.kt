@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
+import app.yokan.datasource.animeav1.AnimeAV1Client
+import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.ui.screens.AnimeDetailsScreen
@@ -56,6 +58,7 @@ class MainActivity : ComponentActivity() {
 
     private val aniListClient: AniListClient by inject()
     private val nyaaSearchEngine: NyaaSearchEngine by inject()
+    private val animeAV1Client: AnimeAV1Client by inject()
     private val httpClient: HttpClient by inject()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,6 +79,7 @@ class MainActivity : ComponentActivity() {
                         YokanApp(
                             aniListClient = aniListClient,
                             nyaaSearchEngine = nyaaSearchEngine,
+                            animeAV1Client = animeAV1Client,
                         )
                     }
                 }
@@ -89,7 +93,8 @@ private sealed interface Screen {
     data object Cache : Screen
     data class Details(val anime: AniListMedia) : Screen
     data class Player(
-        val torrent: NyaaTorrent,
+        val torrent: NyaaTorrent? = null,
+        val webStream: WebStreamSource? = null,
         val anime: AniListMedia? = null,
         val episode: Int? = null,
         val previousScreen: Screen,
@@ -110,15 +115,40 @@ private data class ResolvingEpisodeState(
 private fun YokanApp(
     aniListClient: AniListClient,
     nyaaSearchEngine: NyaaSearchEngine,
+    animeAV1Client: AnimeAV1Client,
 ) {
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
     var resolvingEpisodeState by remember { mutableStateOf<ResolvingEpisodeState?>(null) }
     var selectedNavTab by remember { mutableStateOf(0) }
 
-    // Auto-Resolver en segundo plano: Selecciona la mejor fuente heurística e inicia reproducción directa
+    // Auto-Resolver Híbrido:
+    // 1. Intento prioritario por AnimeAV1 (servidor UPN por defecto para carga inmediata sin anuncios ni seeds)
+    // 2. Fallback a la red BitTorrent (Nyaa / Erai-raws) si no está disponible en la web
     LaunchedEffect(resolvingEpisodeState) {
         val state = resolvingEpisodeState ?: return@LaunchedEffect
+        val prev = currentScreen
+
+        // Intento 1: AnimeAV1 (UPN primero)
+        val webStreamResult = animeAV1Client.resolveBestStream(
+            romajiTitle = state.anime.title.romaji,
+            englishTitle = state.anime.title.english,
+            episodeNumber = state.episode,
+        )
+
+        val bestWebStream = webStreamResult.getOrNull()
+        if (bestWebStream != null) {
+            resolvingEpisodeState = null
+            currentScreen = Screen.Player(
+                webStream = bestWebStream,
+                anime = state.anime,
+                episode = state.episode,
+                previousScreen = prev,
+            )
+            return@LaunchedEffect
+        }
+
+        // Intento 2: Nyaa Torrents
         val absEpisode = state.anime.calculateAbsoluteEpisode(state.episode).takeIf { it != state.episode }
         val bestTorrentResult = nyaaSearchEngine.resolveBestTorrent(
             romajiTitle = state.anime.title.romaji,
@@ -131,7 +161,6 @@ private fun YokanApp(
 
         bestTorrentResult.fold(
             onSuccess = { bestTorrent ->
-                val prev = currentScreen
                 resolvingEpisodeState = null
                 if (bestTorrent != null) {
                     currentScreen = Screen.Player(
@@ -173,6 +202,7 @@ private fun YokanApp(
         val playerScreen = currentScreen as Screen.Player
         VideoPlayerScreen(
             torrent = playerScreen.torrent,
+            webStream = playerScreen.webStream,
             episodeNumber = playerScreen.episode,
             absoluteEpisodeNumber = playerScreen.anime?.let {
                 playerScreen.episode?.let { ep -> it.calculateAbsoluteEpisode(ep).takeIf { abs -> abs != ep } }
@@ -234,6 +264,7 @@ private fun YokanApp(
                         onPlayTorrent = { torrent ->
                             currentScreen = Screen.Player(
                                 torrent = torrent,
+                                webStream = null,
                                 anime = null,
                                 episode = null,
                                 previousScreen = Screen.Cache,
@@ -303,6 +334,7 @@ private fun YokanApp(
             anime = modal.anime,
             episodeNumber = modal.episode,
             searchEngine = nyaaSearchEngine,
+            animeAV1Client = animeAV1Client,
             onTorrentSelect = { torrent ->
                 val prev = if (currentScreen is Screen.Player) {
                     (currentScreen as Screen.Player).previousScreen
@@ -312,6 +344,22 @@ private fun YokanApp(
                 torrentModalState = null
                 currentScreen = Screen.Player(
                     torrent = torrent,
+                    webStream = null,
+                    anime = modal.anime,
+                    episode = modal.episode,
+                    previousScreen = prev,
+                )
+            },
+            onWebStreamSelect = { webStream ->
+                val prev = if (currentScreen is Screen.Player) {
+                    (currentScreen as Screen.Player).previousScreen
+                } else {
+                    currentScreen
+                }
+                torrentModalState = null
+                currentScreen = Screen.Player(
+                    torrent = null,
+                    webStream = webStream,
                     anime = modal.anime,
                     episode = modal.episode,
                     previousScreen = prev,

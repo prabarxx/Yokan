@@ -2,6 +2,7 @@ package app.yokan
 
 import android.app.Application
 import app.yokan.anilist.client.AniListClient
+import app.yokan.datasource.animeav1.AnimeAV1Client
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -31,6 +32,7 @@ class YokanApplication : Application() {
             }
             single { AniListClient(get()) }
             single { NyaaSearchEngine(get()) }
+            single { AnimeAV1Client(get()) }
         }
 
         startKoin {

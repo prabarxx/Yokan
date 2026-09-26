@@ -51,9 +51,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.net.Uri
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
@@ -166,7 +170,8 @@ private fun rememberPlayerTouchSeekState(
 
 @Composable
 fun VideoPlayerScreen(
-    torrent: NyaaTorrent,
+    torrent: NyaaTorrent? = null,
+    webStream: WebStreamSource? = null,
     episodeNumber: Int? = null,
     absoluteEpisodeNumber: Int? = null,
     onChangeSource: (() -> Unit)? = null,
@@ -320,25 +325,54 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(torrent.magnetUrl) {
+    LaunchedEffect(webStream?.streamUrl) {
+        val stream = webStream ?: return@LaunchedEffect
+        loadingStatus = "Cargando stream web de AnimeAV1 (${stream.serverName})..."
+        errorMessage = null
+        try {
+            logger.info("Iniciando reproducción de stream web: ${stream.streamUrl}")
+            val uri = Uri.parse(stream.streamUrl)
+            val dataSourceFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent(stream.headers["User-Agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .setDefaultRequestProperties(stream.headers)
+
+            val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+            val mediaItem = MediaItem.fromUri(uri)
+            val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
+
+            player.exoPlayer.setMediaSource(mediaSource)
+            player.exoPlayer.prepare()
+            player.exoPlayer.playWhenReady = true
+            loadingStatus = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logger.error("Error al reproducir stream web: ${e.message}", e)
+            errorMessage = "Error al reproducir stream: ${e.localizedMessage ?: e::class.simpleName}"
+            loadingStatus = null
+        }
+    }
+
+    LaunchedEffect(torrent?.magnetUrl) {
+        val currentTorrent = torrent ?: return@LaunchedEffect
         loadingStatus = "Conectando con la red BitTorrent..."
         errorMessage = null
         try {
-            logger.info("Iniciando descarga torrent para: ${torrent.title}")
+            logger.info("Iniciando descarga torrent para: ${currentTorrent.title}")
             val torrentManager = TorrentManager.getInstance(context)
             val downloader = torrentManager.downloader
 
             loadingStatus = "Obteniendo metadatos del torrent..."
-            val directTorrentUrl = torrent.torrentUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+            val directTorrentUrl = currentTorrent.torrentUrl.takeIf { it.startsWith("http", ignoreCase = true) }
             val encodedInfo = if (directTorrentUrl != null) {
                 runCatching {
                     downloader.fetchTorrent(directTorrentUrl)
                 }.getOrElse { error ->
                     logger.warn("Falló descarga directa de .torrent HTTP (${error.message}), recurriendo a magnet...")
-                    downloader.fetchTorrent(torrent.magnetUrl)
+                    downloader.fetchTorrent(currentTorrent.magnetUrl)
                 }
             } else {
-                downloader.fetchTorrent(torrent.magnetUrl)
+                downloader.fetchTorrent(currentTorrent.magnetUrl)
             }
 
             loadingStatus = "Conectando con peers..."
@@ -388,9 +422,9 @@ fun VideoPlayerScreen(
 
             runCatching {
                 app.yokan.media.CacheStorageManager.getInstance(context).recordCachedTorrent(
-                    title = targetFile.fileName.ifBlank { torrent.title },
-                    magnetUrl = torrent.magnetUrl,
-                    torrentUrl = torrent.torrentUrl,
+                    title = targetFile.fileName.ifBlank { currentTorrent.title },
+                    magnetUrl = currentTorrent.magnetUrl,
+                    torrentUrl = currentTorrent.torrentUrl,
                     fileSizeBytes = targetFile.length,
                 )
             }
@@ -523,7 +557,7 @@ fun VideoPlayerScreen(
                     PlayerTopBar(
                         title = {
                             Text(
-                                text = torrent.title,
+                                text = torrent?.title ?: webStream?.title ?: "Reproduciendo",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 fontWeight = FontWeight.Bold,
