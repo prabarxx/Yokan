@@ -343,15 +343,7 @@ fun VideoPlayerScreen(
                 val buf = exo.bufferedPosition.coerceAtLeast(0L)
                 exoBufferedPosition = buf
 
-                if (currentMediaData != null) {
-                    val pieces = currentMediaData?.handle?.entry?.pieces
-                    if (!pieces.isNullOrEmpty()) {
-                        val doneCount = pieces.count { it.state == PieceState.FINISHED }
-                        val total = pieces.size
-                        val pct = (doneCount * 100) / total
-                        cachePercentText = "Caché: $pct%"
-                    }
-                } else if (validDur > 0L) {
+                if (currentMediaData == null && validDur > 0L) {
                     val pct = ((buf.toFloat() / validDur.toFloat()) * 100f).toInt().coerceIn(0, 100)
                     cachePercentText = "Caché: $pct%"
                     val ratio = (buf.toFloat() / validDur.toFloat()).coerceIn(0f, 1f)
@@ -559,6 +551,8 @@ fun VideoPlayerScreen(
                 chunkWeights = weights,
                 chunkStates = states,
             )
+            val doneCount = states.count { it == ChunkState.DONE }
+            cachePercentText = "Caché: ${(doneCount * 100) / states.size.coerceAtLeast(1)}%"
 
             if (states.all { it == ChunkState.DONE }) {
                 break
