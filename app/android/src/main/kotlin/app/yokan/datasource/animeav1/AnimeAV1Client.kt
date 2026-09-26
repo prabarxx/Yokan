@@ -7,14 +7,14 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import me.him188.ani.utils.logging.AniLogger
+import me.him188.ani.utils.logging.logger
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 class AnimeAV1Client(
     private val httpClient: HttpClient = HttpClient(),
 ) {
-    private val logger = AniLogger(AnimeAV1Client::class)
+    private val logger = logger("AnimeAV1Client")
 
     companion object {
         private const val BASE_URL = "https://animeav1.com"
