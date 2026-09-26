@@ -50,6 +50,8 @@ data class AniListMedia(
     val genres: List<String> = emptyList(),
     val status: String? = null,
     val streamingEpisodes: List<AniListStreamingEpisode> = emptyList(),
+    val synonyms: List<String> = emptyList(),
+    val previousEpisodesCount: Int? = null,
 ) {
     val displayScore: String
         get() = averageScore?.let { "$it%" } ?: "N/A"
@@ -64,4 +66,9 @@ data class AniListMedia(
 
     val effectiveEpisodesCount: Int
         get() = episodes ?: streamingEpisodes.size.takeIf { it > 0 } ?: 0
+
+    val absoluteEpisodeOffset: Int
+        get() = previousEpisodesCount ?: 0
+
+    fun calculateAbsoluteEpisode(relativeEpisode: Int): Int = absoluteEpisodeOffset + relativeEpisode
 }

@@ -329,7 +329,7 @@ fun AnimeDetailsScreen(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "Toca un episodio para elegir una fuente o torrent.",
+                            text = "Toca un episodio para reproducir con la mejor fuente automática.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

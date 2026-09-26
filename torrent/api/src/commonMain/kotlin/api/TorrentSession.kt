@@ -77,6 +77,12 @@ interface TorrentSession {
     fun getPeers(): List<PeerInfo>
 
     /**
+     * Asigna prioridad máxima al archivo objetivo y prioridad nula (IGNORE) a los demás
+     * para descargas selectivas de paquetes completos (Batches) y streaming instantáneo.
+     */
+    suspend fun prioritizeSingleFile(targetFile: TorrentFileEntry)
+
+    /**
      * 关闭该下载任务, 释放资源. 将会等待 native 线程结束.
      */
     suspend fun close()

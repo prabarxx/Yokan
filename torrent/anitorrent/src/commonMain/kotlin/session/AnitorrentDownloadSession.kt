@@ -515,6 +515,19 @@ class AnitorrentDownloadSession(
 
     override suspend fun getFiles(): List<TorrentFileEntry> = this.actualTorrentInfo.await().entries
 
+    override suspend fun prioritizeSingleFile(targetFile: TorrentFileEntry) {
+        val entries = this.actualTorrentInfo.await().entries
+        for (entry in entries) {
+            if (entry == targetFile || entry.fileName == targetFile.fileName || entry.pathInTorrent == targetFile.pathInTorrent) {
+                logger.info { "[$handleId] Setting file priority HIGH for target file: ${entry.fileName}" }
+                handle.setFilePriority(entry.index, FilePriority.HIGH)
+            } else {
+                logger.info { "[$handleId] Setting file priority IGNORE for non-target file: ${entry.fileName}" }
+                handle.setFilePriority(entry.index, FilePriority.IGNORE)
+            }
+        }
+    }
+
     override fun getPeers() = handle.getPeers()
 
     @Volatile

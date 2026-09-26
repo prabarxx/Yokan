@@ -2,20 +2,29 @@ package app.yokan.ui.screens
 
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -58,6 +67,7 @@ import me.him188.ani.app.platform.features.StreamType
 import me.him188.ani.app.platform.features.getComponentAccessorsImpl
 import me.him188.ani.app.platform.findActivity
 import me.him188.ani.app.torrent.api.files.FilePriority
+import me.him188.ani.app.torrent.api.files.TorrentFileEntry
 import me.him188.ani.app.torrent.api.pieces.PieceState
 import me.him188.ani.app.torrent.api.pieces.forEach
 import me.him188.ani.app.torrent.api.pieces.isEmpty
@@ -151,6 +161,9 @@ private fun rememberPlayerTouchSeekState(
 @Composable
 fun VideoPlayerScreen(
     torrent: NyaaTorrent,
+    episodeNumber: Int? = null,
+    absoluteEpisodeNumber: Int? = null,
+    onChangeSource: (() -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -296,7 +309,9 @@ fun VideoPlayerScreen(
             val videoFiles = files.filter { file ->
                 videoExtensions.any { ext -> file.fileName.endsWith(ext, ignoreCase = true) }
             }
-            val targetFile = videoFiles.maxByOrNull { it.length } ?: files.maxByOrNull { it.length }
+            val targetFile = findMatchingEpisodeFile(videoFiles, episodeNumber, absoluteEpisodeNumber)
+                ?: videoFiles.maxByOrNull { it.length }
+                ?: files.maxByOrNull { it.length }
 
             if (targetFile == null || targetFile.length <= 0) {
                 errorMessage = "No se encontró ningún archivo de video en este torrent."
@@ -305,6 +320,7 @@ fun VideoPlayerScreen(
             }
 
             loadingStatus = "Preparando streaming: ${targetFile.fileName}..."
+            session.prioritizeSingleFile(targetFile)
             val handle = targetFile.createHandle().apply {
                 resume(FilePriority.HIGH)
             }
@@ -441,6 +457,33 @@ fun VideoPlayerScreen(
                             )
                         },
                         actions = {
+                            if (onChangeSource != null) {
+                                OutlinedButton(
+                                    onClick = onChangeSource,
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color.White,
+                                        containerColor = Color.Black.copy(alpha = 0.5f)
+                                    ),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.7f)),
+                                    shape = RoundedCornerShape(16.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.SwapHoriz,
+                                        contentDescription = "Cambiar fuente",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = Color.White,
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Cambiar fuente",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                    )
+                                }
+                            }
                             IconButton(onClick = { player.skip(85_000L) }) {
                                 Icon(AniIcons.Forward85, contentDescription = "+85s", tint = Color.White)
                             }
@@ -645,17 +688,58 @@ fun VideoPlayerScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Spacer(Modifier.height(16.dp))
-                        Button(
-                            onClick = onBack,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Text("Volver")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (onChangeSource != null) {
+                                OutlinedButton(
+                                    onClick = onChangeSource,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                ) {
+                                    Text("Cambiar fuente", color = Color.White)
+                                }
+                            }
+                            Button(
+                                onClick = onBack,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("Volver")
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Identifica el archivo interno cuyo nombre coincida con el episodio solicitado
+ * (ej. ...S03E04... o ... - 04.mkv), con soporte para numeración relativa y absoluta.
+ */
+private fun findMatchingEpisodeFile(
+    files: List<TorrentFileEntry>,
+    episodeNumber: Int?,
+    absoluteEpisodeNumber: Int?,
+): TorrentFileEntry? {
+    if (files.isEmpty()) return null
+    if (files.size == 1) return files.first()
+    if (episodeNumber == null && absoluteEpisodeNumber == null) return null
+
+    val targets = listOfNotNull(episodeNumber, absoluteEpisodeNumber).distinct()
+    for (ep in targets) {
+        val patterns = listOf(
+            Regex("""(?i)[sS]\d+[eE]0*${ep}\b"""),
+            Regex("""(?i)\b(?:ep|episode|cap|capitulo)\.?\s*0*${ep}\b"""),
+            Regex("""(?i)[eE]0*${ep}\b"""),
+            Regex("""[\[\(-]\s*0*${ep}\s*[\]\)-]"""),
+            Regex("""(?:\s|_)0*${ep}(?:\s|_|\.)"""),
+            Regex("""\b0*${ep}\b""")
+        )
+        for (pattern in patterns) {
+            val matched = files.firstOrNull { pattern.containsMatchIn(it.fileName) }
+            if (matched != null) return matched
+        }
+    }
+    return null
 }

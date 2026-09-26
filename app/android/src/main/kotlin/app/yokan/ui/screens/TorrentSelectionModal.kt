@@ -76,7 +76,10 @@ fun TorrentSelectionModal(
         val result = searchEngine.search(
             romajiTitle = anime.title.romaji,
             englishTitle = anime.title.english,
+            synonyms = anime.synonyms,
             episodeNumber = episodeNumber,
+            absoluteEpisodeNumber = anime.calculateAbsoluteEpisode(episodeNumber).takeIf { it != episodeNumber },
+            totalEpisodes = anime.effectiveEpisodesCount,
         )
         result.fold(
             onSuccess = {
@@ -239,6 +242,7 @@ fun TorrentSelectionModal(
                         items(filteredTorrents) { torrent ->
                             AnimekoTorrentCard(
                                 torrent = torrent,
+                                isTopRecommended = torrent == allTorrents.firstOrNull() && torrent.score > 0.0,
                                 onClick = { onTorrentSelect(torrent) }
                             )
                         }
@@ -258,6 +262,7 @@ fun TorrentSelectionModal(
 @Composable
 private fun AnimekoTorrentCard(
     torrent: NyaaTorrent,
+    isTopRecommended: Boolean = false,
     onClick: () -> Unit,
 ) {
     Card(
@@ -293,6 +298,25 @@ private fun AnimekoTorrentCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                // Insignia recomendada según Auto-Resolver
+                if (isTopRecommended) {
+                    AssistChip(
+                        onClick = onClick,
+                        label = {
+                            Text(
+                                text = "⭐ Recomendado",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2E7D32),
+                            )
+                        },
+                        border = null,
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color(0xFF81C784).copy(alpha = 0.25f)
+                        )
+                    )
+                }
+
                 // Sembradores (🌱)
                 AssistChip(
                     onClick = onClick,
@@ -320,15 +344,34 @@ private fun AnimekoTorrentCard(
                     border = null,
                 )
 
-                // Tamaño
+                // Tamaño corregido (por capítulo si es batch)
                 AssistChip(
                     onClick = onClick,
-                    label = { Text(torrent.size, fontSize = 11.sp) },
+                    label = { Text(torrent.displaySize, fontSize = 11.sp) },
                     border = null,
                     colors = AssistChipDefaults.assistChipColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                     )
                 )
+
+                // Indicador de Batch / Colección completa
+                if (torrent.isBatch) {
+                    AssistChip(
+                        onClick = onClick,
+                        label = {
+                            Text(
+                                text = "📦 Batch",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                        },
+                        border = null,
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                        )
+                    )
+                }
 
                 // Calidad / Resolución
                 AssistChip(

@@ -6,12 +6,14 @@ on:
       - main
     tags:
       - 'v*'
+      - '2.0*'
+      - '[0-9]+.*'
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Nombre del tag o versión de release (ej. v1.0.6)'
+        description: 'Nombre del tag o versión de release (ej. 2.0)'
         required: false
-        default: 'v1.0.10'
+        default: '2.0'
 
 permissions:
   contents: write
@@ -113,7 +115,7 @@ jobs:
           elif [ -n "${{ inputs.tag_name }}" ]; then
             echo "val=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "val=v1.0.10" >> "$GITHUB_OUTPUT"
+            echo "val=2.0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish GitHub Release
@@ -124,17 +126,19 @@ jobs:
           body: |
             ## Yokan ${{ steps.tag.outputs.val }}
 
-            Aplicación moderna de anime con motor de reproducción por torrents P2P y catálogo impulsado por AniList.
+            Aplicación moderna de anime con motor de reproducción por torrents P2P, catálogo impulsado por AniList y arquitectura de Auto-Resolver de fuentes.
 
             ### Archivos disponibles:
             - **`yokan-arm64-v8a.apk`**: APK optimizado para dispositivos Android modernos de 64 bits (arm64-v8a).
             - **`yokan-universal.apk`**: APK compatible con todas las arquitecturas Android.
 
-            ### Características:
-            - **Cerebro AniList**: Búsqueda, tendencias y catálogo global conectado en tiempo real con la API GraphQL de AniList.
-            - **Motor Torrent Streaming P2P**: Búfer optimizado de 32MB con prioridad instantánea (`deadline = 0`) para reproducción en milisegundos.
-            - **Filtro Español / Latino**: Búsqueda inteligente en Nyaa con prioridad para subtítulos en español y releases multilenguaje.
-            - **Reproductor ExoPlayer**: Controles táctiles de brillo, volumen, tiempo y renderizado de subtítulos ASS/SSA.
+            ### Nuevas características (v2.0):
+            - 🎯 **Auto-Resolver de Fuentes**: Algoritmo heurístico que pondera coincidencia exacta de capítulo, subtítulos en español, 1080p y seeders para reproducción instantánea con un solo toque.
+            - 📦 **Gestión de Batches y Descarga Selectiva**: Soporte para paquetes completos de series aplicando Prioridad Cero (IGNORE) al resto de episodios y Prioridad Alta al capítulo seleccionado.
+            - ⚖️ **Cálculo de Peso Real por Capítulo**: Corrección de tamaño en la interfaz para colecciones completas mostrando el peso estimado por episodio en lugar del tamaño global.
+            - 🇪🇸 **Filtro Estricto de Subtítulos en Español**: Reconocimiento real de pistas MultiSub oficiales y tags explícitos en español, descartando falsos positivos (Dual Audio / Multi-Audio).
+            - 🔄 **Numeración Relativa y Absoluta**: Integración de prequels de AniList para series con temporadas continuas (ej. Attack on Titan).
+            - 🔀 **Botón "Cambiar fuente"**: Accesible directamente en los controles del reproductor para cambiar manualmente de fuente en cualquier momento.
           draft: false
           prerelease: false
           files: |

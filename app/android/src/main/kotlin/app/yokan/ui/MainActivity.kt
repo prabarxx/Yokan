@@ -5,22 +5,36 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
 import app.yokan.datasource.nyaa.NyaaSearchEngine
@@ -74,10 +88,20 @@ private sealed interface Screen {
     data object Home : Screen
     data object Cache : Screen
     data class Details(val anime: AniListMedia) : Screen
-    data class Player(val torrent: NyaaTorrent, val previousScreen: Screen) : Screen
+    data class Player(
+        val torrent: NyaaTorrent,
+        val anime: AniListMedia? = null,
+        val episode: Int? = null,
+        val previousScreen: Screen,
+    ) : Screen
 }
 
 private data class TorrentModalState(
+    val anime: AniListMedia,
+    val episode: Int,
+)
+
+private data class ResolvingEpisodeState(
     val anime: AniListMedia,
     val episode: Int,
 )
@@ -89,10 +113,48 @@ private fun YokanApp(
 ) {
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
+    var resolvingEpisodeState by remember { mutableStateOf<ResolvingEpisodeState?>(null) }
     var selectedNavTab by remember { mutableStateOf(0) }
 
-    BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null) {
-        if (torrentModalState != null) {
+    // Auto-Resolver en segundo plano: Selecciona la mejor fuente heurística e inicia reproducción directa
+    LaunchedEffect(resolvingEpisodeState) {
+        val state = resolvingEpisodeState ?: return@LaunchedEffect
+        val absEpisode = state.anime.calculateAbsoluteEpisode(state.episode).takeIf { it != state.episode }
+        val bestTorrentResult = nyaaSearchEngine.resolveBestTorrent(
+            romajiTitle = state.anime.title.romaji,
+            englishTitle = state.anime.title.english,
+            synonyms = state.anime.synonyms,
+            episodeNumber = state.episode,
+            absoluteEpisodeNumber = absEpisode,
+            totalEpisodes = state.anime.effectiveEpisodesCount,
+        )
+
+        bestTorrentResult.fold(
+            onSuccess = { bestTorrent ->
+                val prev = currentScreen
+                resolvingEpisodeState = null
+                if (bestTorrent != null) {
+                    currentScreen = Screen.Player(
+                        torrent = bestTorrent,
+                        anime = state.anime,
+                        episode = state.episode,
+                        previousScreen = prev,
+                    )
+                } else {
+                    torrentModalState = TorrentModalState(state.anime, state.episode)
+                }
+            },
+            onFailure = {
+                resolvingEpisodeState = null
+                torrentModalState = TorrentModalState(state.anime, state.episode)
+            }
+        )
+    }
+
+    BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null || resolvingEpisodeState != null) {
+        if (resolvingEpisodeState != null) {
+            resolvingEpisodeState = null
+        } else if (torrentModalState != null) {
             torrentModalState = null
         } else {
             when (val screen = currentScreen) {
@@ -111,6 +173,15 @@ private fun YokanApp(
         val playerScreen = currentScreen as Screen.Player
         VideoPlayerScreen(
             torrent = playerScreen.torrent,
+            episodeNumber = playerScreen.episode,
+            absoluteEpisodeNumber = playerScreen.anime?.let {
+                playerScreen.episode?.let { ep -> it.calculateAbsoluteEpisode(ep).takeIf { abs -> abs != ep } }
+            },
+            onChangeSource = if (playerScreen.anime != null && playerScreen.episode != null) {
+                {
+                    torrentModalState = TorrentModalState(playerScreen.anime, playerScreen.episode)
+                }
+            } else null,
             onBack = {
                 currentScreen = playerScreen.previousScreen
             },
@@ -161,7 +232,12 @@ private fun YokanApp(
                 is Screen.Cache -> {
                     CacheManagementScreen(
                         onPlayTorrent = { torrent ->
-                            currentScreen = Screen.Player(torrent = torrent, previousScreen = Screen.Cache)
+                            currentScreen = Screen.Player(
+                                torrent = torrent,
+                                anime = null,
+                                episode = null,
+                                previousScreen = Screen.Cache,
+                            )
                         }
                     )
                 }
@@ -171,7 +247,7 @@ private fun YokanApp(
                         initialAnime = screen.anime,
                         aniListClient = aniListClient,
                         onEpisodeClick = { anime, episode ->
-                            torrentModalState = TorrentModalState(anime, episode)
+                            resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
                         },
                         onBack = {
                             currentScreen = Screen.Home
@@ -183,15 +259,63 @@ private fun YokanApp(
         }
     }
 
+    // Modal de resolución automática en progreso
+    resolvingEpisodeState?.let { state ->
+        Dialog(onDismissRequest = { resolvingEpisodeState = null }) {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        text = "Seleccionando la mejor fuente...",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = "Episodio ${state.episode} • ${state.anime.title.displayTitle}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            val anime = state.anime
+                            val ep = state.episode
+                            resolvingEpisodeState = null
+                            torrentModalState = TorrentModalState(anime, ep)
+                        }
+                    ) {
+                        Text("Elegir fuente manualmente")
+                    }
+                }
+            }
+        }
+    }
+
     torrentModalState?.let { modal ->
         TorrentSelectionModal(
             anime = modal.anime,
             episodeNumber = modal.episode,
             searchEngine = nyaaSearchEngine,
             onTorrentSelect = { torrent ->
-                val prev = currentScreen
+                val prev = if (currentScreen is Screen.Player) {
+                    (currentScreen as Screen.Player).previousScreen
+                } else {
+                    currentScreen
+                }
                 torrentModalState = null
-                currentScreen = Screen.Player(torrent = torrent, previousScreen = prev)
+                currentScreen = Screen.Player(
+                    torrent = torrent,
+                    anime = modal.anime,
+                    episode = modal.episode,
+                    previousScreen = prev,
+                )
             },
             onDismiss = {
                 torrentModalState = null

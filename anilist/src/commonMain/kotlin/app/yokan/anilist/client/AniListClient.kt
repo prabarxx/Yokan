@@ -182,6 +182,47 @@ class AniListClient(
                     averageScore
                     genres
                     status
+                    synonyms
+                    relations {
+                      edges {
+                        relationType
+                        node {
+                          id
+                          episodes
+                          title {
+                            romaji
+                            english
+                          }
+                          relations {
+                            edges {
+                              relationType
+                              node {
+                                id
+                                episodes
+                                relations {
+                              edges {
+                                relationType
+                                node {
+                                  id
+                                  episodes
+                                  relations {
+                                    edges {
+                                      relationType
+                                      node {
+                                        id
+                                        episodes
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
                     streamingEpisodes {
                       title
                       url
@@ -256,6 +297,29 @@ class AniListClient(
         val status = obj["status"]?.jsonPrimitive?.contentOrNull
 
         val genres = obj["genres"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val synonyms = obj["synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+
+        var previousEpisodes: Int? = null
+        var currentRelNode: kotlinx.serialization.json.JsonObject? = obj
+        while (currentRelNode != null) {
+            val edges = currentRelNode["relations"]?.jsonObject?.get("edges")?.jsonArray
+            var nextNode: kotlinx.serialization.json.JsonObject? = null
+            if (edges != null) {
+                for (edge in edges) {
+                    val relType = edge.jsonObject["relationType"]?.jsonPrimitive?.contentOrNull
+                    if (relType == "PREQUEL") {
+                        val nodeObj = edge.jsonObject["node"]?.jsonObject
+                        val ep = nodeObj?.get("episodes")?.jsonPrimitive?.intOrNull
+                        if (ep != null && ep > 0) {
+                            previousEpisodes = (previousEpisodes ?: 0) + ep
+                        }
+                        nextNode = nodeObj
+                        break
+                    }
+                }
+            }
+            currentRelNode = nextNode
+        }
 
         val streamingEpisodes = obj["streamingEpisodes"]?.jsonArray?.mapNotNull { epElem ->
             val epObj = epElem.jsonObject
@@ -278,6 +342,8 @@ class AniListClient(
             genres = genres,
             status = status,
             streamingEpisodes = streamingEpisodes,
+            synonyms = synonyms,
+            previousEpisodesCount = previousEpisodes,
         )
     }
 }

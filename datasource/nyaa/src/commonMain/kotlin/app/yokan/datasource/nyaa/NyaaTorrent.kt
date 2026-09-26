@@ -14,6 +14,10 @@ data class NyaaTorrent(
     val publishDate: String = "",
     val torrentUrl: String = "",
     val infoHash: String = "",
+    val isBatch: Boolean = false,
+    val displaySize: String = size,
+    val score: Double = 0.0,
+    val isTrustedSpanishGroup: Boolean = false,
 ) {
     val seedersBadgeColor: Long
         get() = when {
