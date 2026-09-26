@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,15 +55,19 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.net.Uri
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
 import org.openani.mediamp.MediaStatus
+import me.him188.ani.app.videoplayer.ui.progress.PlayerProgressSliderState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.NonCancellable
@@ -183,9 +188,13 @@ fun VideoPlayerScreen(
     val activity = remember(context) { context.findActivity() }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var loadingStatus by remember { mutableStateOf<String?>("Conectando con la red BitTorrent...") }
+    var loadingStatus by remember { mutableStateOf<String?>("Conectando con la red...") }
     var currentMediaData by remember { mutableStateOf<TorrentMediaData?>(null) }
     var cacheProgressInfo by remember { mutableStateOf<MediaCacheProgressInfo?>(null) }
+    var cachePercentText by remember { mutableStateOf<String?>(null) }
+    var exoDuration by remember { mutableLongStateOf(0L) }
+    var exoPosition by remember { mutableLongStateOf(0L) }
+    var exoBufferedPosition by remember { mutableLongStateOf(0L) }
 
     val coroutineExceptionHandler = remember {
         CoroutineExceptionHandler { _, throwable ->
@@ -306,12 +315,55 @@ fun VideoPlayerScreen(
                 logger.info("ExoPlayer playbackState changed: $playbackState (READY=3, BUFFERING=2, ENDED=4, IDLE=1)")
                 if (playbackState == Player.STATE_READY) {
                     loadingStatus = null
+                    errorMessage = null
+                    val dur = exoPlayer.duration
+                    if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
+                        exoDuration = dur
+                    }
                 }
             }
         }
         exoPlayer.addListener(listener)
         onDispose {
             exoPlayer.removeListener(listener)
+        }
+    }
+
+    // Actualización continua de posición, duración, búfer y caché
+    LaunchedEffect(player) {
+        val exo = (player as? LibassExoPlayerMediampPlayer)?.exoPlayer
+        while (isActive) {
+            if (exo != null) {
+                val dur = exo.duration
+                val validDur = if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) dur else 0L
+                if (validDur > 0L) {
+                    exoDuration = validDur
+                }
+                exoPosition = exo.currentPosition.coerceAtLeast(0L)
+                val buf = exo.bufferedPosition.coerceAtLeast(0L)
+                exoBufferedPosition = buf
+
+                if (currentMediaData != null) {
+                    val pieces = currentMediaData?.handle?.entry?.pieces
+                    if (!pieces.isNullOrEmpty()) {
+                        val doneCount = pieces.count { it.state == PieceState.FINISHED }
+                        val total = pieces.size
+                        val pct = (doneCount * 100) / total
+                        cachePercentText = "Caché: $pct%"
+                    }
+                } else if (validDur > 0L) {
+                    val pct = ((buf.toFloat() / validDur.toFloat()) * 100f).toInt().coerceIn(0, 100)
+                    cachePercentText = "Caché: $pct%"
+                    val ratio = (buf.toFloat() / validDur.toFloat()).coerceIn(0f, 1f)
+                    if (ratio > 0f) {
+                        cacheProgressInfo = MediaCacheProgressInfo(
+                            chunkWeights = listOf(ratio, 1f - ratio),
+                            chunkStates = listOf(ChunkState.DONE, ChunkState.NONE),
+                        )
+                    }
+                }
+            }
+            delay(250)
         }
     }
 
@@ -333,18 +385,51 @@ fun VideoPlayerScreen(
         try {
             logger.info("Iniciando reproducción de stream web: ${stream.streamUrl}")
             val uri = Uri.parse(stream.streamUrl)
+
+            val headers = mutableMapOf<String, String>()
+            headers.putAll(stream.headers)
+            if (!headers.containsKey("User-Agent")) {
+                headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            if (!headers.containsKey("Referer")) {
+                headers["Referer"] = "https://animeav1.uns.bio/"
+            }
+            if (!headers.containsKey("Origin")) {
+                headers["Origin"] = "https://animeav1.uns.bio"
+            }
+            headers["Accept"] = "*/*"
+
             val dataSourceFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(stream.headers["User-Agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .setDefaultRequestProperties(stream.headers)
+                .setUserAgent(headers["User-Agent"]!!)
+                .setDefaultRequestProperties(headers)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(30_000)
+                .setReadTimeoutMs(30_000)
 
-            val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-            val mediaItem = MediaItem.fromUri(uri)
-            val mediaSource = mediaSourceFactory.createMediaSource(mediaItem)
+            val isHlsStream = stream.isHls ||
+                stream.streamUrl.contains(".m3u8", ignoreCase = true) ||
+                stream.streamUrl.contains("/pl/", ignoreCase = true) ||
+                stream.streamUrl.contains("master", ignoreCase = true)
 
-            player.exoPlayer.setMediaSource(mediaSource)
-            player.exoPlayer.prepare()
-            player.exoPlayer.playWhenReady = true
-            loadingStatus = null
+            val mediaItem = MediaItem.Builder()
+                .setUri(uri)
+                .setMimeType(if (isHlsStream) MimeTypes.APPLICATION_M3U8 else MimeTypes.VIDEO_MP4)
+                .build()
+
+            val mediaSource = if (isHlsStream) {
+                HlsMediaSource.Factory(dataSourceFactory)
+                    .setAllowChunklessPreparation(false)
+                    .createMediaSource(mediaItem)
+            } else {
+                ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(mediaItem)
+            }
+
+            exoPlayer?.stop()
+            exoPlayer?.clearMediaItems()
+            exoPlayer?.setMediaSource(mediaSource)
+            exoPlayer?.prepare()
+            exoPlayer?.playWhenReady = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -516,11 +601,22 @@ fun VideoPlayerScreen(
         platformComponents.brightnessManager?.asLevelController() ?: NoOpLevelController
     }
 
-    val progressSliderState = rememberMediaProgressSliderState(
-        player = player,
-        onPreview = {},
-        onPreviewFinished = { player.seekTo(it) },
-    )
+    val progressSliderState = remember(player) {
+        PlayerProgressSliderState(
+            currentPositionMillis = {
+                if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
+            },
+            totalDurationMillis = {
+                if (exoDuration > 0L) exoDuration else (player.mediaProperties.value?.durationMillis ?: 0L)
+            },
+            chapters = { emptyList() },
+            onPreview = {},
+            onPreviewFinished = { targetMs ->
+                exoPlayer?.seekTo(targetMs)
+                player.seekTo(targetMs)
+            },
+        )
+    }
 
     val indicatorState = rememberGestureIndicatorState()
     val swipeSeekerConfig = SwipeSeekerConfig.Default
@@ -556,16 +652,7 @@ fun VideoPlayerScreen(
                 gestureLocked = isLocked,
                 topBar = {
                     PlayerTopBar(
-                        title = {
-                            Text(
-                                text = torrent?.title ?: webStream?.title ?: "Reproduciendo",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                        },
+                        title = {},
                         actions = {
                             if (onChangeSource != null) {
                                 OutlinedButton(
@@ -594,10 +681,20 @@ fun VideoPlayerScreen(
                                     )
                                 }
                             }
-                            IconButton(onClick = { player.skip(85_000L) }) {
+                            IconButton(onClick = {
+                                val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
+                                val target = (current + 85_000L).coerceIn(0L, if (exoDuration > 0L) exoDuration else Long.MAX_VALUE)
+                                exoPlayer?.seekTo(target)
+                                player.skip(85_000L)
+                            }) {
                                 Icon(AniIcons.Forward85, contentDescription = "+85s", tint = Color.White)
                             }
-                            IconButton(onClick = { player.skip(90_000L) }) {
+                            IconButton(onClick = {
+                                val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
+                                val target = (current + 90_000L).coerceIn(0L, if (exoDuration > 0L) exoDuration else Long.MAX_VALUE)
+                                exoPlayer?.seekTo(target)
+                                player.skip(90_000L)
+                            }) {
                                 Icon(AniIcons.Forward90, contentDescription = "+90s", tint = Color.White)
                             }
                             IconButton(onClick = { showPlayerStats = !showPlayerStats }) {
@@ -622,17 +719,21 @@ fun VideoPlayerScreen(
                     )
                 },
                 gestureHost = {
+                    val videoPropertiesState by player.mediaProperties.collectAsState(null)
+                    val effectiveDuration = if (exoDuration > 0L) exoDuration else (videoPropertiesState?.durationMillis ?: 0L)
                     val swipeSeekerState = rememberSwipeSeekerState(
                         screenWidthPx = constraints.maxWidth,
                         swipeSeekerConfig = swipeSeekerConfig,
                     ) { offsetSeconds ->
+                        val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
+                        val target = (current + offsetSeconds * 1000L).coerceIn(0L, if (effectiveDuration > 0L) effectiveDuration else Long.MAX_VALUE)
+                        exoPlayer?.seekTo(target)
                         player.skip(offsetSeconds * 1000L)
                     }
 
-                    val videoPropertiesState by player.mediaProperties.collectAsState(null)
                     val enableSwipeToSeek by remember {
                         derivedStateOf {
-                            videoPropertiesState?.let { it.durationMillis != 0L } == true
+                            (videoPropertiesState?.let { it.durationMillis != 0L } == true) || exoDuration > 0L
                         }
                     }
 
@@ -707,10 +808,31 @@ fun VideoPlayerScreen(
                             )
                         },
                         progressIndicator = {
-                            MediaProgressIndicatorText(
-                                state = progressSliderState,
-                                playbackSpeedState = playbackSpeedControllerState,
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                MediaProgressIndicatorText(
+                                    state = progressSliderState,
+                                    playbackSpeedState = playbackSpeedControllerState,
+                                )
+                                cachePercentText?.let { cacheText ->
+                                    Text(
+                                        text = cacheText,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White.copy(alpha = 0.9f),
+                                            fontSize = 11.sp,
+                                        ),
+                                        modifier = Modifier
+                                            .background(
+                                                color = Color.Black.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(4.dp),
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
                         },
                         progressSlider = {
                             MediaProgressSlider(
