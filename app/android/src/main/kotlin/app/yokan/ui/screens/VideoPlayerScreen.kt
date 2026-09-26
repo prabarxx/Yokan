@@ -1,6 +1,8 @@
 package app.yokan.ui.screens
 
 import android.content.pm.ActivityInfo
+import android.os.Build
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -46,6 +48,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -205,14 +210,58 @@ fun VideoPlayerScreen(
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_USER
             }
+            val window = activity?.window
+            if (window != null) {
+                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                if (requestedFullscreen) {
+                    insetsController.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    insetsController.hide(WindowInsetsCompat.Type.systemBars())
+                } else {
+                    insetsController.show(WindowInsetsCompat.Type.systemBars())
+                    insetsController.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                }
+            }
         }
     )
 
-    // Force landscape on start, restore on exit
+    // Force landscape on start, hide system bars in immersive mode, restore on exit
     DisposableEffect(activity) {
+        val window = activity?.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        val originalSystemBarsBehavior = insetsController?.systemBarsBehavior
+
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
+        if (window != null) {
+            insetsController?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val params = window.attributes
+                params.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                window.attributes = params
+            }
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                @Suppress("DEPRECATION")
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        }
+
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER
+            if (window != null) {
+                insetsController?.show(WindowInsetsCompat.Type.systemBars())
+                insetsController?.systemBarsBehavior =
+                    originalSystemBarsBehavior ?: WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                    @Suppress("DEPRECATION")
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                }
+            }
             runCatching { player.close() }
             runCatching { currentMediaData?.close() }
         }
@@ -399,6 +448,31 @@ fun VideoPlayerScreen(
     }
 
     val controllerState = rememberVideoControllerState()
+
+    // Ensure system bars (notification/battery bar) stay hidden when player controls auto-hide or during playback
+    LaunchedEffect(controllerState.visibility, isFullscreen) {
+        if (isFullscreen && controllerState.visibility == ControllerVisibility.Invisible) {
+            val window = activity?.window
+            if (window != null) {
+                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                insetsController.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
+    LaunchedEffect(playWhenReady, isFullscreen) {
+        if (isFullscreen && playWhenReady) {
+            val window = activity?.window
+            if (window != null) {
+                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                insetsController.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
     val platformComponents = remember(context) { getComponentAccessorsImpl(context) }
     val audioController = remember(platformComponents) {
         platformComponents.audioManager?.asLevelController(StreamType.MUSIC) ?: NoOpLevelController

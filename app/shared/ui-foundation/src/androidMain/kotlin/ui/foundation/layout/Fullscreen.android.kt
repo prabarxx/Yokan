@@ -27,12 +27,14 @@ actual suspend fun Context.setRequestFullScreen(window: PlatformWindowMP, fullsc
 
             // keep screen on
             this.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            setSystemBarVisible(window, false)
         } else {
             // cancel landscape
             requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
             // don't keep screen on
             this.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            setSystemBarVisible(window, true)
         }
     } else {
         val orientation = if (fullscreen) {
