@@ -295,6 +295,8 @@ fun VideoPlayerScreen(
     val isBuffering by remember(player) { player.state.map { it.isBuffering } }
         .collectAsStateWithLifecycle(false)
 
+    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
+
     var exoPlayWhenReady by remember { mutableStateOf(true) }
     var exoIsBuffering by remember { mutableStateOf(false) }
 
@@ -324,7 +326,6 @@ fun VideoPlayerScreen(
 
     DarkStatusBarAppearance()
 
-    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
     DisposableEffect(exoPlayer) {
         if (exoPlayer == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
@@ -671,6 +672,42 @@ fun VideoPlayerScreen(
 
     val playerStats by rememberPlayerStatsState(player)
 
+    val togglePlayPause: () -> Unit = {
+        if (currentMediaData == null && exoPlayer != null) {
+            val exo = exoPlayer
+            if (exo.playbackState == Player.STATE_ENDED) {
+                exo.seekTo(0)
+                exo.playWhenReady = true
+                exoPlayWhenReady = true
+                coroutineScope.launch {
+                    indicatorState.showResumedLong()
+                }
+            } else {
+                val nextState = !exo.playWhenReady
+                exo.playWhenReady = nextState
+                exoPlayWhenReady = nextState
+                coroutineScope.launch {
+                    if (nextState) {
+                        indicatorState.showResumedLong()
+                    } else {
+                        indicatorState.showPausedLong()
+                    }
+                }
+            }
+        } else {
+            if (player.state.value.playWhenReady) {
+                coroutineScope.launch {
+                    indicatorState.showPausedLong()
+                }
+            } else {
+                coroutineScope.launch {
+                    indicatorState.showResumedLong()
+                }
+            }
+            player.togglePlayWhenReady()
+        }
+    }
+
     AniTheme(darkModeOverride = DarkMode.DARK) {
         Box(modifier = Modifier.fillMaxSize()) {
             VideoScaffold(
@@ -763,42 +800,6 @@ fun VideoPlayerScreen(
                     val enableSwipeToSeek by remember {
                         derivedStateOf {
                             (videoPropertiesState?.let { it.durationMillis != 0L } == true) || exoDuration > 0L
-                        }
-                    }
-
-                    val togglePlayPause: () -> Unit = {
-                        if (currentMediaData == null && exoPlayer != null) {
-                            val exo = exoPlayer
-                            if (exo.playbackState == Player.STATE_ENDED) {
-                                exo.seekTo(0)
-                                exo.playWhenReady = true
-                                exoPlayWhenReady = true
-                                coroutineScope.launch {
-                                    indicatorState.showResumedLong()
-                                }
-                            } else {
-                                val nextState = !exo.playWhenReady
-                                exo.playWhenReady = nextState
-                                exoPlayWhenReady = nextState
-                                coroutineScope.launch {
-                                    if (nextState) {
-                                        indicatorState.showResumedLong()
-                                    } else {
-                                        indicatorState.showPausedLong()
-                                    }
-                                }
-                            }
-                        } else {
-                            if (player.state.value.playWhenReady) {
-                                coroutineScope.launch {
-                                    indicatorState.showPausedLong()
-                                }
-                            } else {
-                                coroutineScope.launch {
-                                    indicatorState.showResumedLong()
-                                }
-                            }
-                            player.togglePlayWhenReady()
                         }
                     }
 
