@@ -273,6 +273,14 @@ private fun YokanApp(
                     )
                 }
                 is Screen.Details -> {
+                    LaunchedEffect(screen.anime.id) {
+                        // Precarga en segundo plano mientras el usuario visualiza los detalles del anime
+                        animeAV1Client.prefetchEpisode(
+                            romajiTitle = screen.anime.title.romaji,
+                            englishTitle = screen.anime.title.english,
+                            episodeNumber = 1,
+                        )
+                    }
                     AnimeDetailsScreen(
                         animeId = screen.anime.id,
                         initialAnime = screen.anime,

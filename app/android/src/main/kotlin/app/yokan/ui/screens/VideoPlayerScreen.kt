@@ -295,7 +295,30 @@ fun VideoPlayerScreen(
     val isBuffering by remember(player) { player.state.map { it.isBuffering } }
         .collectAsStateWithLifecycle(false)
 
-    if (playWhenReady) {
+    var exoPlayWhenReady by remember { mutableStateOf(true) }
+    var exoIsBuffering by remember { mutableStateOf(false) }
+
+    val isEffectivelyPlaying by remember {
+        derivedStateOf {
+            if (currentMediaData == null) {
+                exoPlayWhenReady && (exoPlayer?.playbackState != Player.STATE_ENDED)
+            } else {
+                playWhenReady
+            }
+        }
+    }
+
+    val isEffectivelyBuffering by remember {
+        derivedStateOf {
+            if (currentMediaData == null) {
+                exoIsBuffering
+            } else {
+                isBuffering
+            }
+        }
+    }
+
+    if (isEffectivelyPlaying) {
         ScreenOnEffect()
     }
 
@@ -313,6 +336,7 @@ fun VideoPlayerScreen(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 logger.info("ExoPlayer playbackState changed: $playbackState (READY=3, BUFFERING=2, ENDED=4, IDLE=1)")
+                exoIsBuffering = playbackState == Player.STATE_BUFFERING
                 if (playbackState == Player.STATE_READY) {
                     loadingStatus = null
                     errorMessage = null
@@ -320,6 +344,16 @@ fun VideoPlayerScreen(
                     if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
                         exoDuration = dur
                     }
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                exoPlayWhenReady = playWhenReady
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (currentMediaData == null) {
+                    exoPlayWhenReady = isPlaying || (exoPlayer?.playWhenReady == true)
                 }
             }
         }
@@ -395,8 +429,8 @@ fun VideoPlayerScreen(
                 .setUserAgent(headers["User-Agent"]!!)
                 .setDefaultRequestProperties(headers)
                 .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(30_000)
-                .setReadTimeoutMs(30_000)
+                .setConnectTimeoutMs(8_000)
+                .setReadTimeoutMs(10_000)
 
             val isHlsStream = stream.isHls ||
                 stream.streamUrl.contains(".m3u8", ignoreCase = true) ||
@@ -410,7 +444,7 @@ fun VideoPlayerScreen(
 
             val mediaSource = if (isHlsStream) {
                 HlsMediaSource.Factory(dataSourceFactory)
-                    .setAllowChunklessPreparation(false)
+                    .setAllowChunklessPreparation(true)
                     .createMediaSource(mediaItem)
             } else {
                 ProgressiveMediaSource.Factory(dataSourceFactory)
@@ -422,6 +456,7 @@ fun VideoPlayerScreen(
             exoPlayer?.setMediaSource(mediaSource)
             exoPlayer?.prepare()
             exoPlayer?.playWhenReady = true
+            exoPlayWhenReady = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -576,8 +611,8 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(playWhenReady, isFullscreen) {
-        if (isFullscreen && playWhenReady) {
+    LaunchedEffect(isEffectivelyPlaying, isFullscreen) {
+        if (isFullscreen && isEffectivelyPlaying) {
             val window = activity?.window
             if (window != null) {
                 val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -731,6 +766,42 @@ fun VideoPlayerScreen(
                         }
                     }
 
+                    val togglePlayPause: () -> Unit = {
+                        if (currentMediaData == null && exoPlayer != null) {
+                            val exo = exoPlayer
+                            if (exo.playbackState == Player.STATE_ENDED) {
+                                exo.seekTo(0)
+                                exo.playWhenReady = true
+                                exoPlayWhenReady = true
+                                coroutineScope.launch {
+                                    indicatorState.showResumedLong()
+                                }
+                            } else {
+                                val nextState = !exo.playWhenReady
+                                exo.playWhenReady = nextState
+                                exoPlayWhenReady = nextState
+                                coroutineScope.launch {
+                                    if (nextState) {
+                                        indicatorState.showResumedLong()
+                                    } else {
+                                        indicatorState.showPausedLong()
+                                    }
+                                }
+                            }
+                        } else {
+                            if (player.state.value.playWhenReady) {
+                                coroutineScope.launch {
+                                    indicatorState.showPausedLong()
+                                }
+                            } else {
+                                coroutineScope.launch {
+                                    indicatorState.showResumedLong()
+                                }
+                            }
+                            player.togglePlayWhenReady()
+                        }
+                    }
+
                     LockableVideoGestureHost(
                         controllerState = controllerState,
                         seekerState = swipeSeekerState,
@@ -743,18 +814,7 @@ fun VideoPlayerScreen(
                         playbackSpeedControllerState = playbackSpeedControllerState,
                         fullscreenState = fullscreenState,
                         modifier = Modifier.fillMaxSize(),
-                        onTogglePauseResume = {
-                            if (player.state.value.playWhenReady) {
-                                coroutineScope.launch {
-                                    indicatorState.showPausedLong()
-                                }
-                            } else {
-                                coroutineScope.launch {
-                                    indicatorState.showResumedLong()
-                                }
-                            }
-                            player.togglePlayWhenReady()
-                        },
+                        onTogglePauseResume = togglePlayPause,
                         onToggleDanmaku = {},
                         onTogglePlayerStats = {
                             showPlayerStats = !showPlayerStats
@@ -778,7 +838,7 @@ fun VideoPlayerScreen(
                 },
                 floatingMessage = {
                     val status = loadingStatus
-                    if (isBuffering || status != null) {
+                    if (isEffectivelyBuffering || status != null) {
                         VideoLoadingIndicator(
                             showProgress = true,
                             text = {
@@ -797,8 +857,8 @@ fun VideoPlayerScreen(
                     PlayerControllerBar(
                         startActions = {
                             PlayerControllerDefaults.PlaybackIcon(
-                                isPlaying = { playWhenReady },
-                                onClick = { player.togglePlayWhenReady() },
+                                isPlaying = { isEffectivelyPlaying },
+                                onClick = togglePlayPause,
                             )
                         },
                         progressIndicator = {

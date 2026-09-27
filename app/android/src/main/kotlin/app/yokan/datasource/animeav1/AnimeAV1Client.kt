@@ -16,6 +16,11 @@ class AnimeAV1Client(
 ) {
     private val logger = logger("AnimeAV1Client")
 
+    // Caché en memoria para evitar repetir peticiones de red (0ms tras la primera resolución)
+    private val slugCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val episodeSourcesCache = java.util.concurrent.ConcurrentHashMap<String, List<AnimeAV1Source>>()
+    private val resolvedStreamCache = java.util.concurrent.ConcurrentHashMap<String, WebStreamSource>()
+
     companion object {
         private const val BASE_URL = "https://animeav1.com"
         private const val UNS_BIO_BASE = "https://animeav1.uns.bio"
@@ -85,31 +90,35 @@ class AnimeAV1Client(
      * Resuelve el slug óptimo contrastando títulos en japonés (romaji) y en inglés.
      */
     suspend fun resolveSlug(romajiTitle: String, englishTitle: String?): String {
+        val cacheKey = "$romajiTitle|$englishTitle"
+        slugCache[cacheKey]?.let { return it }
+
         val candidates = searchCatalog(romajiTitle).ifEmpty {
             englishTitle?.let { searchCatalog(it) }.orEmpty()
         }
 
-        if (candidates.isNotEmpty()) {
+        val resolved = if (candidates.isNotEmpty()) {
             val romajiClean = romajiTitle.lowercase().trim()
             val exactMatch = candidates.firstOrNull { it.title.equals(romajiClean, ignoreCase = true) }
-            if (exactMatch != null) return exactMatch.slug
-
-            val englishClean = englishTitle?.lowercase()?.trim()
-            if (englishClean != null) {
-                val exactEnglish = candidates.firstOrNull { it.title.equals(englishClean, ignoreCase = true) }
-                if (exactEnglish != null) return exactEnglish.slug
+            if (exactMatch != null) exactMatch.slug
+            else {
+                val englishClean = englishTitle?.lowercase()?.trim()
+                val exactEnglish = if (englishClean != null) candidates.firstOrNull { it.title.equals(englishClean, ignoreCase = true) } else null
+                if (exactEnglish != null) exactEnglish.slug
+                else {
+                    val partialMatch = candidates.firstOrNull {
+                        it.title.contains(romajiClean, ignoreCase = true) ||
+                                (englishClean != null && it.title.contains(englishClean, ignoreCase = true))
+                    }
+                    partialMatch?.slug ?: candidates.first().slug
+                }
             }
-
-            val partialMatch = candidates.firstOrNull {
-                it.title.contains(romajiClean, ignoreCase = true) ||
-                        (englishClean != null && it.title.contains(englishClean, ignoreCase = true))
-            }
-            if (partialMatch != null) return partialMatch.slug
-
-            return candidates.first().slug
+        } else {
+            titleToSlug(romajiTitle)
         }
 
-        return titleToSlug(romajiTitle)
+        slugCache[cacheKey] = resolved
+        return resolved
     }
 
     /**
@@ -117,6 +126,9 @@ class AnimeAV1Client(
      * Prioriza estrictamente el servidor UPN (UPNShare / uns.bio) tal como se solicitó.
      */
     suspend fun getEpisodeSources(slug: String, episodeNumber: Int): List<AnimeAV1Source> = withContext(Dispatchers.IO) {
+        val cacheKey = "$slug:$episodeNumber"
+        episodeSourcesCache[cacheKey]?.let { return@withContext it }
+
         runCatching {
             val url = "$BASE_URL/media/$slug/$episodeNumber"
             val response = httpClient.get(url) {
@@ -160,12 +172,16 @@ class AnimeAV1Client(
             // 3. YourUpload
             // 4. Voe
             // 5. Otros
-            sources.sortedWith(
+            val sortedSources = sources.sortedWith(
                 compareByDescending<AnimeAV1Source> { it.isUpn }
                     .thenByDescending { it.server.equals("MP4Upload", ignoreCase = true) }
                     .thenByDescending { it.server.equals("YourUpload", ignoreCase = true) }
                     .thenByDescending { it.server.equals("Voe", ignoreCase = true) }
             )
+            if (sortedSources.isNotEmpty()) {
+                episodeSourcesCache[cacheKey] = sortedSources
+            }
+            sortedSources
         }.getOrElse { error ->
             logger.error("Error al obtener fuentes del episodio $episodeNumber de '$slug': ${error.message}", error)
             emptyList()
@@ -177,8 +193,10 @@ class AnimeAV1Client(
      * En el caso de UPNShare, aplica el descifrado AES-128-CBC sin anuncios.
      */
     suspend fun resolveStream(source: AnimeAV1Source): Result<WebStreamSource> = withContext(Dispatchers.IO) {
+        resolvedStreamCache[source.embedUrl]?.let { return@withContext Result.success(it) }
+
         runCatching {
-            if (source.isUpn) {
+            val webStream = if (source.isUpn) {
                 val hash = Regex("""#([a-zA-Z0-9_-]+)""").find(source.embedUrl)?.groupValues?.get(1)
                     ?: throw IllegalArgumentException("No se encontró el hash en la URL de UPN: ${source.embedUrl}")
 
@@ -273,12 +291,28 @@ class AnimeAV1Client(
                     isHls = false,
                 )
             }
+            resolvedStreamCache[source.embedUrl] = webStream
+            webStream
         }
     }
 
     /**
+     * Comprueba de forma ultrarrápida si el enlace de video está disponible (no 404, no caído).
+     */
+    suspend fun verifyStreamUrlAlive(url: String, headers: Map<String, String> = emptyMap()): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = httpClient.get(url) {
+                headers.forEach { (k, v) -> header(k, v) }
+                header("Range", "bytes=0-10")
+            }
+            response.status.value in 200..399
+        }.getOrDefault(false)
+    }
+
+    /**
      * Resuelve la mejor fuente de streaming rápido para el episodio:
-     * Intenta primero con UPN (por defecto); si falla, recurre en cascada a los otros servidores.
+     * Intenta en cascada en orden de prioridad y verifica que el enlace responda;
+     * si un servidor está caído (404/500/timeout), salta automáticamente al siguiente espejo.
      */
     suspend fun resolveBestStream(
         romajiTitle: String,
@@ -296,28 +330,49 @@ class AnimeAV1Client(
             // Filtrar preferentemente pistas SUB
             val subSources = sources.filter { !it.isDub }.ifEmpty { sources }
 
-            // 1. Intentar UPN primero (prioridad máxima)
-            val upnSource = subSources.firstOrNull { it.isUpn }
-            if (upnSource != null) {
-                val upnResult = resolveStream(upnSource)
-                if (upnResult.isSuccess) {
-                    logger.info("Resolución exitosa de stream UPN: ${upnResult.getOrNull()?.streamUrl}")
-                    return@runCatching upnResult.getOrNull()
-                } else {
-                    logger.warn("Falló resolución UPN: ${upnResult.exceptionOrNull()?.message}, probando alternativas...")
+            // 1. Probar servidores en orden de prioridad y verificar que el stream esté vivo
+            var firstValidStream: WebStreamSource? = null
+            for (source in subSources) {
+                val res = resolveStream(source)
+                if (res.isSuccess) {
+                    val candidate = res.getOrNull()
+                    if (candidate != null) {
+                        if (firstValidStream == null) {
+                            firstValidStream = candidate
+                        }
+                        val isAlive = verifyStreamUrlAlive(candidate.streamUrl, candidate.headers)
+                        if (isAlive) {
+                            logger.info("Fuente funcional confirmada: ${source.server} -> ${candidate.streamUrl}")
+                            return@runCatching candidate
+                        } else {
+                            logger.warn("El servidor ${source.server} devolvió un enlace caído/404, probando siguiente espejo...")
+                            resolvedStreamCache.remove(source.embedUrl)
+                        }
+                    }
                 }
             }
 
-            // 2. Intentar alternativas en orden
-            for (source in subSources) {
-                if (source.isUpn) continue // ya intentado
-                val res = resolveStream(source)
-                if (res.isSuccess) {
-                    return@runCatching res.getOrNull()
-                }
+            // Si la verificación estricta falló en todos (por ejemplo por políticas de cabecera de la CDN),
+            // usar el primer stream resuelto como salvavidas en vez de abortar
+            if (firstValidStream != null) {
+                logger.info("Usando stream de respaldo sin verificación estricta: ${firstValidStream.serverName}")
+                return@runCatching firstValidStream
             }
 
             null
+        }
+    }
+
+    /**
+     * Precarga en segundo plano el slug y las fuentes del episodio para que al pulsar 'Reproducir' esté en RAM.
+     */
+    suspend fun prefetchEpisode(
+        romajiTitle: String,
+        englishTitle: String?,
+        episodeNumber: Int,
+    ) = withContext(Dispatchers.IO) {
+        runCatching {
+            resolveBestStream(romajiTitle, englishTitle, episodeNumber)
         }
     }
 }

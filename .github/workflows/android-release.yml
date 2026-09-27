@@ -130,18 +130,11 @@ jobs:
           body: |
             ## Yokan ${{ steps.tag.outputs.val }}
 
-            Aplicación moderna de anime con arquitectura híbrida de reproducción: motor BitTorrent P2P + Web Streaming (AnimeAV1 con HLS nativo sin anuncios).
+            Se aplicaron pequeños cambios para mejorar la experiencia de usuario.
 
             ### Archivos disponibles:
             - **`yokan-arm64-v8a.apk`**: APK optimizado para dispositivos Android modernos de 64 bits (arm64-v8a).
             - **`yokan-universal.apk`**: APK compatible con todas las arquitecturas Android.
-
-            ### Novedades en la versión 2.1 (Integración Híbrida AnimeAV1 y Torrent):
-            - ⚡ **Integración Híbrida Web Streaming (AnimeAV1)**: Reproducción directa por streaming web sin esperas de semillas para animes antiguos, de nicho o conexiones móviles ligeras.
-            - 🛡️ **Servidor UPN por Defecto con Descifrado AES-128-CBC**: Extracción directa de playlists master HLS (`.m3u8`) del servidor UPN (`uns.bio`) sin anuncios ni ventanas emergentes.
-            - 🚫 **Bloqueador de Anuncios y Popups**: Filtro de dominios publicitarios y bloqueo de overlays y ventanas flotantes para reproducción limpia.
-            - 🔀 **Selector de Fuentes Híbrido en UI**: Pestañas en el modal de selección para alternar entre "Streaming Web (AnimeAV1)" y "Torrents P2P (Nyaa / Erai-raws)".
-            - 🎯 **Auto-Resolver Inteligente**: Intento prioritario en servidor UPN de AnimeAV1 con fallback automático a la red BitTorrent.
           draft: false
           prerelease: false
           files: |
