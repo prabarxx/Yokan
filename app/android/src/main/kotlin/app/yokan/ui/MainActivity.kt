@@ -46,6 +46,7 @@ import app.yokan.ui.screens.CacheManagementScreen
 import app.yokan.ui.screens.HomeScreen
 import app.yokan.ui.screens.TorrentSelectionModal
 import app.yokan.ui.screens.VideoPlayerScreen
+import app.yokan.ui.state.HomeCache
 import io.ktor.client.HttpClient
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuite
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuiteLayout
@@ -180,14 +181,19 @@ private fun YokanApp(
         )
     }
 
-    BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null || resolvingEpisodeState != null) {
+    BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null || resolvingEpisodeState != null || (currentScreen is Screen.Home && (selectedNavTab == 1 || HomeCache.isSearching))) {
         if (resolvingEpisodeState != null) {
             resolvingEpisodeState = null
         } else if (torrentModalState != null) {
             torrentModalState = null
         } else {
             when (val screen = currentScreen) {
-                is Screen.Home -> Unit
+                is Screen.Home -> {
+                    if (selectedNavTab == 1 || HomeCache.isSearching) {
+                        selectedNavTab = 0
+                        HomeCache.isSearching = false
+                    }
+                }
                 is Screen.Cache -> {
                     selectedNavTab = 0
                     currentScreen = Screen.Home
@@ -221,18 +227,20 @@ private fun YokanApp(
             navigationSuite = {
                 AniNavigationSuite {
                     item(
-                        selected = selectedNavTab == 0 && currentScreen is Screen.Home,
+                        selected = selectedNavTab == 0 && currentScreen is Screen.Home && !HomeCache.isSearching,
                         onClick = {
                             selectedNavTab = 0
+                            HomeCache.isSearching = false
                             currentScreen = Screen.Home
                         },
                         icon = { Icon(Icons.Rounded.Explore, contentDescription = "Explorar") },
                         label = { Text("Explorar") },
                     )
                     item(
-                        selected = selectedNavTab == 1,
+                        selected = (selectedNavTab == 1 && currentScreen is Screen.Home) || (currentScreen is Screen.Home && HomeCache.isSearching),
                         onClick = {
                             selectedNavTab = 1
+                            HomeCache.isSearching = true
                             currentScreen = Screen.Home
                         },
                         icon = { Icon(Icons.Rounded.Search, contentDescription = "Buscar") },
@@ -256,6 +264,10 @@ private fun YokanApp(
                         aniListClient = aniListClient,
                         onAnimeClick = { anime ->
                             currentScreen = Screen.Details(anime)
+                        },
+                        isSearchTab = selectedNavTab == 1 || HomeCache.isSearching,
+                        onSearchModeChange = { active ->
+                            selectedNavTab = if (active) 1 else 0
                         },
                     )
                 }

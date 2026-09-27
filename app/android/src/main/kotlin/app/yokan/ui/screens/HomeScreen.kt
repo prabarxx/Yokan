@@ -51,13 +51,15 @@ import app.yokan.ui.state.HomeCache
 fun HomeScreen(
     aniListClient: AniListClient,
     onAnimeClick: (AniListMedia) -> Unit,
+    isSearchTab: Boolean = false,
+    onSearchModeChange: ((Boolean) -> Unit)? = null,
 ) {
     var trendingList by remember { mutableStateOf(HomeCache.trendingList) }
     var popularList by remember { mutableStateOf(HomeCache.popularList) }
-    var searchResults by remember { mutableStateOf<List<AniListMedia>>(emptyList()) }
+    var searchResults by remember { mutableStateOf(HomeCache.searchResults) }
 
-    var isSearching by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(isSearchTab || HomeCache.isSearching) }
+    var searchQuery by remember { mutableStateOf(HomeCache.searchQuery) }
     var isLoading by remember { mutableStateOf(!HomeCache.isLoaded) }
     var isSearchLoading by remember { mutableStateOf(false) }
 
@@ -65,6 +67,19 @@ fun HomeScreen(
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
     val layoutParams = SubjectGridDefaults.coverLayoutParameters()
+
+    LaunchedEffect(isSearchTab) {
+        if (isSearchTab != isSearching) {
+            isSearching = isSearchTab
+            HomeCache.isSearching = isSearchTab
+        }
+    }
+
+    val setSearching: (Boolean) -> Unit = { active ->
+        isSearching = active
+        HomeCache.isSearching = active
+        onSearchModeChange?.invoke(active)
+    }
 
     LaunchedEffect(Unit) {
         if (!HomeCache.isLoaded) {
@@ -94,6 +109,7 @@ fun HomeScreen(
                             value = searchQuery,
                             onValueChange = { query ->
                                 searchQuery = query
+                                HomeCache.searchQuery = query
                                 searchJob?.cancel()
                                 if (query.isNotBlank()) {
                                     isSearchLoading = true
@@ -102,11 +118,13 @@ fun HomeScreen(
                                         val res = aniListClient.searchAnime(query, 1, 30)
                                         res.onSuccess {
                                             searchResults = it
+                                            HomeCache.searchResults = it
                                             isSearchLoading = false
                                         }
                                     }
                                 } else {
                                     searchResults = emptyList()
+                                    HomeCache.searchResults = emptyList()
                                     isSearchLoading = false
                                 }
                             },
@@ -134,10 +152,13 @@ fun HomeScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            isSearching = !isSearching
-                            if (!isSearching) {
+                            val newMode = !isSearching
+                            setSearching(newMode)
+                            if (!newMode) {
                                 searchQuery = ""
                                 searchResults = emptyList()
+                                HomeCache.searchQuery = ""
+                                HomeCache.searchResults = emptyList()
                             }
                         }
                     ) {
@@ -187,7 +208,7 @@ fun HomeScreen(
             } else {
                 LazyVerticalGrid(
                     columns = layoutParams.gridCells,
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
                     horizontalArrangement = layoutParams.horizontalArrangement,
                     verticalArrangement = layoutParams.verticalArrangement,
                     modifier = Modifier
@@ -206,7 +227,7 @@ fun HomeScreen(
         } else {
             LazyVerticalGrid(
                 columns = layoutParams.gridCells,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
                 horizontalArrangement = layoutParams.horizontalArrangement,
                 verticalArrangement = layoutParams.verticalArrangement,
                 modifier = Modifier

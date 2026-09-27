@@ -7,9 +7,16 @@ object HomeCache {
     var popularList: List<AniListMedia> = emptyList()
     var isLoaded: Boolean = false
 
+    var isSearching: Boolean = false
+    var searchQuery: String = ""
+    var searchResults: List<AniListMedia> = emptyList()
+
     fun clear() {
         trendingList = emptyList()
         popularList = emptyList()
         isLoaded = false
+        isSearching = false
+        searchQuery = ""
+        searchResults = emptyList()
     }
 }
