@@ -46,10 +46,15 @@ class WatchHistoryManager private constructor(context: Context) {
     }
 
     private fun loadHistory() {
-        val rawJson = prefs.getString(PREF_KEY, null) ?: return
+        val rawJson = prefs.getString(PREF_KEY, null)
+        if (rawJson == null) {
+            logger.info("Sin historial previo en disco (PREF_KEY ausente)")
+            return
+        }
         runCatching {
             val list = json.decodeFromString<List<WatchProgress>>(rawJson)
             _history.value = list.sortedByDescending { it.lastWatchedTimestamp }
+            logger.info("Historial cargado desde disco: ${list.size} entradas")
         }.onFailure {
             logger.error("Failed to load watch history", it)
         }
@@ -64,7 +69,20 @@ class WatchHistoryManager private constructor(context: Context) {
         // aparecía en sesión pero desaparecía al reiniciar.
         runCatching {
             val encoded = json.encodeToString(items)
-            prefs.edit().putString(PREF_KEY, encoded).commit()
+            val ok = prefs.edit().putString(PREF_KEY, encoded).commit()
+            if (!ok) {
+                logger.error("commit() devolvió false al guardar historial (${items.size} entradas)")
+                return@runCatching
+            }
+            // Verificación: releer y comprobar que lo escrito coincide.
+            val raw = prefs.getString(PREF_KEY, null)
+            if (raw == null) {
+                logger.error("Verificación falló: PREF_KEY ausente tras commit, reintentando...")
+                prefs.edit().putString(PREF_KEY, encoded).commit()
+            } else {
+                val count = runCatching { json.decodeFromString<List<WatchProgress>>(raw).size }.getOrNull()
+                logger.info("Historial guardado y verificado: ${items.size} entradas (leídas: $count)")
+            }
         }.onFailure {
             logger.error("Failed to save watch history", it)
         }
