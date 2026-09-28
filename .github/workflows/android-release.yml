@@ -6,14 +6,10 @@ on:
       - main
     tags:
       - 'v*'
-      - '2.*'
-      - '[0-9]+.*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Nombre del tag o versión de release (ej. 2.1)'
-        required: false
-        default: '2.1'
 
 permissions:
   contents: write
@@ -39,68 +35,84 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          cache-disabled: 'true'
 
-      - name: Configure build properties and RAM
+      - name: Accept Android licenses / install platform 37
         run: |
-          sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx8g -XX:+UseG1GC -Dfile.encoding=UTF-8/' gradle.properties
-          sed -i 's/kotlin.daemon.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx4g -XX:+UseG1GC/' gradle.properties
-          sed -i 's/org.gradle.workers.max=.*/org.gradle.workers.max=4/' gradle.properties
-          
-          echo "jvm.toolchain.version=21" >> local.properties
-          echo "kotlin.native.ignoreDisabledTargets=true" >> local.properties
-          echo "ani.android.abis=arm64-v8a" >> local.properties
-          echo "ani.enable.firebase=false" >> local.properties
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-37" "build-tools;37.0.0" || true
 
-      - name: Generate Signing Keystore
+      - name: Configure build properties
+        run: |
+          sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx6g -XX:+UseG1GC -Dfile.encoding=UTF-8/' gradle.properties
+          sed -i 's/kotlin.daemon.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx3g -XX:+UseG1GC/' gradle.properties
+          sed -i 's/org.gradle.workers.max=.*/org.gradle.workers.max=4/' gradle.properties
+          # local.properties es leído primero por build-logic/properties.kt
+          {
+            echo "ani.android.abis=all"
+            echo "ani.enable.firebase=false"
+            echo "kotlin.native.ignoreDisabledTargets=true"
+          } >> local.properties
+
+      - name: Restore release keystore from secrets (o generar efímero)
         id: keystore
         run: |
           KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
-          keytool -genkeypair \
-            -alias yokan \
-            -keypass yokan123 \
-            -keystore "$KEYSTORE_PATH" \
-            -storepass yokan123 \
-            -dname "CN=Yokan, OU=Yokan, O=Yokan, L=Local, S=State, C=US" \
-            -validity 10000 \
-            -keyalg RSA \
-            -keysize 2048
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
+            echo "store_pass=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_OUTPUT"
+            echo "key_alias=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_OUTPUT"
+            echo "key_pass=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_OUTPUT"
+          else
+            keytool -genkeypair \
+              -alias yokan \
+              -keypass yokan123 \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass yokan123 \
+              -dname "CN=Yokan, OU=Yokan, O=Yokan, L=Local, S=State, C=US" \
+              -validity 10000 \
+              -keyalg RSA \
+              -keysize 2048
+            echo "store_pass=yokan123" >> "$GITHUB_OUTPUT"
+            echo "key_alias=yokan" >> "$GITHUB_OUTPUT"
+            echo "key_pass=yokan123" >> "$GITHUB_OUTPUT"
+          fi
           echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
+          echo "::warning::Usando keystore efímero: cada build firma con clave distinta y Android exigirá desinstalar para actualizar. Para firma estable, añade los secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD."
 
-      - name: Build Android Release APK (arm64-v8a)
+      - name: Build Android Release APK
         run: |
           chmod +x ./gradlew
           ./gradlew :app:android:assembleDefaultRelease \
-            -Pani.android.abis=arm64-v8a \
+            -Pani.android.abis=all \
             -Psigning_release_storeFile="${{ steps.keystore.outputs.keystore_path }}" \
-            -Psigning_release_storePassword="yokan123" \
-            -Psigning_release_keyAlias="yokan" \
-            -Psigning_release_keyPassword="yokan123" \
-            "-Dorg.gradle.jvmargs=-Xmx8g -XX:+UseG1GC -Dfile.encoding=UTF-8" \
-            "-Dkotlin.daemon.jvm.options=-Xmx4g" \
+            -Psigning_release_storePassword="${{ steps.keystore.outputs.store_pass }}" \
+            -Psigning_release_keyAlias="${{ steps.keystore.outputs.key_alias }}" \
+            -Psigning_release_keyPassword="${{ steps.keystore.outputs.key_pass }}" \
             --stacktrace
 
       - name: Organize APKs
         id: apks
         run: |
           mkdir -p output_apks
-          APK_ARM64=$(find app/android/build/outputs/apk -name "*arm64-v8a*.apk" | head -n 1)
-          if [ -n "$APK_ARM64" ] && [ -f "$APK_ARM64" ]; then
-            cp "$APK_ARM64" output_apks/yokan-arm64-v8a.apk
+          # Con abis=all + universalApk=true se generan: arm64-v8a, armeabi-v7a, x86_64 y universal
+          ARM64=$(find app/android/build/outputs/apk -name "*arm64-v8a*.apk" | head -n 1)
+          UNIVERSAL=$(find app/android/build/outputs/apk -name "*universal*.apk" | head -n 1)
+          if [ -n "$ARM64" ] && [ -f "$ARM64" ]; then
+            cp "$ARM64" output_apks/yokan-arm64-v8a.apk
           fi
-          
-          APK_UNIVERSAL=$(find app/android/build/outputs/apk -name "*universal*.apk" | head -n 1)
-          if [ -n "$APK_UNIVERSAL" ] && [ -f "$APK_UNIVERSAL" ]; then
-            cp "$APK_UNIVERSAL" output_apks/yokan-universal.apk
+          if [ -n "$UNIVERSAL" ] && [ -f "$UNIVERSAL" ]; then
+            cp "$UNIVERSAL" output_apks/yokan-universal.apk
           fi
-          
-          if [ -z "$(ls -A output_apks)" ]; then
-            find app/android/build/outputs/apk -name "*.apk" -exec cp {} output_apks/ \;
+          if [ -z "$(ls -A output_apks 2>/dev/null)" ]; then
+            echo "::error::No se encontró ningún APK. Contenido de outputs:"
+            find app/android/build/outputs/apk -type f || true
+            exit 1
           fi
-          
           echo "Generated APKs:"
           ls -lh output_apks/
 
@@ -111,26 +123,13 @@ jobs:
           path: output_apks/*.apk
           if-no-files-found: error
 
-      - name: Determine Tag Name
-        id: tag
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "val=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ inputs.tag_name }}" ]; then
-            echo "val=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "val=2.1" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (solo en tags v*)
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.val }}
-          name: Yokan ${{ steps.tag.outputs.val }}
+          name: Yokan ${{ github.ref_name }}
           body: |
-            ## Yokan ${{ steps.tag.outputs.val }}
-
-            Se aplicaron pequeños cambios para mejorar la experiencia de usuario.
+            ## Yokan ${{ github.ref_name }}
 
             ### Archivos disponibles:
             - **`yokan-arm64-v8a.apk`**: APK optimizado para dispositivos Android modernos de 64 bits (arm64-v8a).
