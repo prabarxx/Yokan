@@ -286,11 +286,10 @@ fun VideoPlayerScreen(
                     window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                 }
             }
-            // Save final position before closing
-            val exo = (player as? LibassExoPlayerMediampPlayer)?.exoPlayer
-            if (animeForHistory != null && episodeNumber != null && exo != null) {
-                val finalPos = exo.currentPosition.coerceAtLeast(0L)
-                val finalDur = exo.duration.let { if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L }
+            // Save final position before closing (posición efectiva: exo o mediamp)
+            if (animeForHistory != null && episodeNumber != null) {
+                val finalPos = effectivePositionMillis()
+                val finalDur = effectiveDurationMillis()
                 if (finalPos > 10_000L && finalDur > 0L) {
                     watchHistoryManager.saveProgress(
                         animeId = animeForHistory.id,
@@ -324,6 +323,21 @@ fun VideoPlayerScreen(
         .collectAsStateWithLifecycle(false)
 
     val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
+
+    // Posición/duración efectivas: en vía web (AnimeAV1) van por exoPlayer,
+    // en vía torrent van por el reproductor mediamp. El slider ya usa este
+    // fallback (líneas del PlayerProgressSliderState); el guardado del
+    // historial debe usarlo también o en vía torrent nunca se guarda nada.
+    fun effectivePositionMillis(): Long {
+        val exoPos = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        return if (exoPos > 0L) exoPos else player.currentPositionMillis.value.coerceAtLeast(0L)
+    }
+    fun effectiveDurationMillis(): Long {
+        val exoDur = exoPlayer?.duration?.let {
+            if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L
+        } ?: 0L
+        return if (exoDur > 0L) exoDur else (player.mediaProperties.value?.durationMillis ?: 0L)
+    }
 
     var exoPlayWhenReady by remember { mutableStateOf(true) }
     var exoIsBuffering by remember { mutableStateOf(false) }
@@ -424,8 +438,10 @@ fun VideoPlayerScreen(
                 }
 
                 // Save progress every 5s for "continue watching"
-                val currentPos = exo.currentPosition.coerceAtLeast(0L)
-                if (animeForHistory != null && episodeNumber != null && validDur > 0L &&
+                // (posición efectiva: vía web sale de exo, vía torrent del mediamp player)
+                val currentPos = effectivePositionMillis()
+                val effectiveDur = effectiveDurationMillis()
+                if (animeForHistory != null && episodeNumber != null && effectiveDur > 0L &&
                     currentPos > 10_000L && (currentPos - lastSavedPositionMs > 5_000L)) {
                     lastSavedPositionMs = currentPos
                     watchHistoryManager.saveProgress(
@@ -437,7 +453,7 @@ fun VideoPlayerScreen(
                         episode = episodeNumber,
                         totalEpisodes = animeForHistory.effectiveEpisodesCount,
                         positionMillis = currentPos,
-                        durationMillis = validDur,
+                        durationMillis = effectiveDur,
                     )
                 }
             }
