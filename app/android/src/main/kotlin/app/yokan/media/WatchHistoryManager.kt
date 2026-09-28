@@ -1,13 +1,9 @@
 package app.yokan.media
 
 import android.content.Context
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -18,13 +14,13 @@ import me.him188.ani.utils.logging.logger
 data class WatchProgress(
     val animeId: Int,
     val animeTitle: String,
-    val animeRomaji: String,
-    val animeEnglish: String?,
-    val coverUrl: String?,
-    val episode: Int,
-    val totalEpisodes: Int,
-    val positionMillis: Long,
-    val durationMillis: Long,
+    val animeRomaji: String = "",
+    val animeEnglish: String? = null,
+    val coverUrl: String? = null,
+    val episode: Int = 1,
+    val totalEpisodes: Int = 0,
+    val positionMillis: Long = 0L,
+    val durationMillis: Long = 0L,
     val lastWatchedTimestamp: Long = System.currentTimeMillis(),
 ) {
     val progressFraction: Float
@@ -39,7 +35,6 @@ class WatchHistoryManager private constructor(context: Context) {
 
     private val logger = logger("WatchHistoryManager")
     private val appContext = context.applicationContext
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val prefs = appContext.getSharedPreferences("yokan_watch_history", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -62,13 +57,16 @@ class WatchHistoryManager private constructor(context: Context) {
 
     private fun saveHistory(items: List<WatchProgress>) {
         _history.value = items
-        scope.launch {
-            runCatching {
-                val encoded = json.encodeToString(items)
-                prefs.edit().putString(PREF_KEY, encoded).apply()
-            }.onFailure {
-                logger.error("Failed to save watch history", it)
-            }
+        // Escritura SÍNCRONA con commit(): el JSON es diminuto (máx. 30 entradas)
+        // y así el dato queda en disco antes de que el proceso pueda morir.
+        // Con apply() + scope.launch() el guardado quedaba encolado y se perdía
+        // al cerrar la app (back + swipe), que es por lo que "Continuar viendo"
+        // aparecía en sesión pero desaparecía al reiniciar.
+        runCatching {
+            val encoded = json.encodeToString(items)
+            prefs.edit().putString(PREF_KEY, encoded).commit()
+        }.onFailure {
+            logger.error("Failed to save watch history", it)
         }
     }
 
