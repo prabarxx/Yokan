@@ -35,15 +35,11 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Accept Android licenses / install platform 37
+      - name: Ensure Android platform 37
         run: |
-          yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-37" "build-tools;37.0.0" || true
 
       - name: Configure build properties
