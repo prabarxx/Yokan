@@ -221,6 +221,25 @@ fun VideoPlayerScreen(
         LibassExoPlayerMediampPlayer(context, playerCoroutineContext)
     }
 
+    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
+
+    // Posición/duración efectivas: en vía web (AnimeAV1) van por exoPlayer,
+    // en vía torrent van por el reproductor mediamp. El slider ya usa este
+    // fallback (PlayerProgressSliderState); el guardado del historial debe
+    // usarlo también o en vía torrent nunca se guarda nada.
+    // (Declaradas aquí arriba porque onDispose las usa y Kotlin solo ve
+    //  funciones locales declaradas antes de su punto de uso.)
+    fun effectivePositionMillis(): Long {
+        val exoPos = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        return if (exoPos > 0L) exoPos else player.currentPositionMillis.value.coerceAtLeast(0L)
+    }
+    fun effectiveDurationMillis(): Long {
+        val exoDur = exoPlayer?.duration?.let {
+            if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L
+        } ?: 0L
+        return if (exoDur > 0L) exoDur else (player.mediaProperties.value?.durationMillis ?: 0L)
+    }
+
     var isFullscreen by remember { mutableStateOf(true) }
     var isLocked by remember { mutableStateOf(false) }
     var showPlayerStats by remember { mutableStateOf(false) }
@@ -321,23 +340,6 @@ fun VideoPlayerScreen(
 
     val isBuffering by remember(player) { player.state.map { it.isBuffering } }
         .collectAsStateWithLifecycle(false)
-
-    val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
-
-    // Posición/duración efectivas: en vía web (AnimeAV1) van por exoPlayer,
-    // en vía torrent van por el reproductor mediamp. El slider ya usa este
-    // fallback (líneas del PlayerProgressSliderState); el guardado del
-    // historial debe usarlo también o en vía torrent nunca se guarda nada.
-    fun effectivePositionMillis(): Long {
-        val exoPos = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-        return if (exoPos > 0L) exoPos else player.currentPositionMillis.value.coerceAtLeast(0L)
-    }
-    fun effectiveDurationMillis(): Long {
-        val exoDur = exoPlayer?.duration?.let {
-            if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L
-        } ?: 0L
-        return if (exoDur > 0L) exoDur else (player.mediaProperties.value?.durationMillis ?: 0L)
-    }
 
     var exoPlayWhenReady by remember { mutableStateOf(true) }
     var exoIsBuffering by remember { mutableStateOf(false) }
