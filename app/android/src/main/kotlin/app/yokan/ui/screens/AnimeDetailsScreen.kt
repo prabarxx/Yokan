@@ -31,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
@@ -39,6 +40,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,12 +53,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
+import app.yokan.media.WatchHistoryManager
 import me.him188.ani.app.ui.foundation.AsyncImage
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -68,6 +72,9 @@ fun AnimeDetailsScreen(
     onEpisodeClick: (AniListMedia, Int) -> Unit,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
+    val watchHistory by watchHistoryManager.allHistory.collectAsState()
     var animeDetails by remember { mutableStateOf<AniListMedia?>(initialAnime) }
     var isLoading by remember { mutableStateOf(animeDetails == null) }
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -263,26 +270,51 @@ fun AnimeDetailsScreen(
                 }
             }
 
-            // Botón de acción principal: "Comenzar a ver"
+            // Botón de acción principal: "Comenzar a ver" / "Continuar"
             val totalEps = anime.effectiveEpisodesCount
-            Button(
-                onClick = { onEpisodeClick(anime, 1) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-                    .height(48.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                )
-            ) {
-                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Comenzar a ver (Episodio 1)",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                )
+            val savedProgress = watchHistory.firstOrNull { it.animeId == anime.id }
+            val hasSavedProgress = savedProgress != null && !savedProgress.isFinished
+            val buttonEpisode = if (hasSavedProgress) savedProgress!!.episode else 1
+            val buttonLabel = if (hasSavedProgress) {
+                val mins = (savedProgress!!.positionMillis / 1000) / 60
+                val secs = (savedProgress.positionMillis / 1000) % 60
+                "Continuar — Ep $buttonEpisode (${mins}:${secs.toString().padStart(2,'0')})"
+            } else {
+                "Comenzar a ver (Episodio 1)"
+            }
+
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Button(
+                    onClick = { onEpisodeClick(anime, buttonEpisode) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                    )
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = buttonLabel,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                    )
+                }
+                // Progress bar for "continuar viendo"
+                if (hasSavedProgress) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { savedProgress!!.progressFraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = Color(0xFFE0E0E0),
+                        trackColor = Color.White.copy(alpha = 0.2f),
+                    )
+                }
             }
 
             // TabRow estilo Animeko: "Episodios" y "Información"
@@ -343,13 +375,17 @@ fun AnimeDetailsScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             for (i in 1..count) {
+                                val isCurrentEpisode = hasSavedProgress && i == savedProgress?.episode
                                 Surface(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(10.dp))
                                         .clickable { onEpisodeClick(anime, i) },
-                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    color = if (isCurrentEpisode)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.surfaceContainerHigh,
                                     shape = RoundedCornerShape(10.dp),
-                                    tonalElevation = 2.dp,
+                                    tonalElevation = if (isCurrentEpisode) 0.dp else 2.dp,
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -359,7 +395,10 @@ fun AnimeDetailsScreen(
                                         Text(
                                             text = "$i",
                                             fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface,
+                                            color = if (isCurrentEpisode)
+                                                Color.White
+                                            else
+                                                MaterialTheme.colorScheme.onSurface,
                                             fontSize = 15.sp,
                                         )
                                     }

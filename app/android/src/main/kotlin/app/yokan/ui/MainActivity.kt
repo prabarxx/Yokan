@@ -47,6 +47,8 @@ import app.yokan.ui.screens.HomeScreen
 import app.yokan.ui.screens.TorrentSelectionModal
 import app.yokan.ui.screens.VideoPlayerScreen
 import app.yokan.ui.state.HomeCache
+import app.yokan.media.WatchHistoryManager
+import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.HttpClient
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuite
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuiteLayout
@@ -98,6 +100,7 @@ private sealed interface Screen {
         val webStream: WebStreamSource? = null,
         val anime: AniListMedia? = null,
         val episode: Int? = null,
+        val initialPositionMillis: Long = 0L,
         val previousScreen: Screen,
     ) : Screen
 }
@@ -118,6 +121,9 @@ private fun YokanApp(
     nyaaSearchEngine: NyaaSearchEngine,
     animeAV1Client: AnimeAV1Client,
 ) {
+    val context = LocalContext.current
+    val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
+
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
     var resolvingEpisodeState by remember { mutableStateOf<ResolvingEpisodeState?>(null) }
@@ -129,6 +135,13 @@ private fun YokanApp(
     LaunchedEffect(resolvingEpisodeState) {
         val state = resolvingEpisodeState ?: return@LaunchedEffect
         val prev = currentScreen
+
+        // Look up saved progress for "continuar viendo"
+        val savedProgress = watchHistoryManager.getProgress(state.anime.id)
+        val savedPositionMillis = if (savedProgress?.episode == state.episode &&
+            savedProgress.progressFraction < 0.92f) {
+            savedProgress.positionMillis
+        } else 0L
 
         // Intento 1: AnimeAV1 (UPN primero)
         val webStreamResult = animeAV1Client.resolveBestStream(
@@ -144,6 +157,7 @@ private fun YokanApp(
                 webStream = bestWebStream,
                 anime = state.anime,
                 episode = state.episode,
+                initialPositionMillis = savedPositionMillis,
                 previousScreen = prev,
             )
             return@LaunchedEffect
@@ -168,6 +182,7 @@ private fun YokanApp(
                         torrent = bestTorrent,
                         anime = state.anime,
                         episode = state.episode,
+                        initialPositionMillis = savedPositionMillis,
                         previousScreen = prev,
                     )
                 } else {
@@ -213,6 +228,8 @@ private fun YokanApp(
             absoluteEpisodeNumber = playerScreen.anime?.let {
                 playerScreen.episode?.let { ep -> it.calculateAbsoluteEpisode(ep).takeIf { abs -> abs != ep } }
             },
+            initialPositionMillis = playerScreen.initialPositionMillis,
+            animeForHistory = playerScreen.anime,
             onChangeSource = if (playerScreen.anime != null && playerScreen.episode != null) {
                 {
                     torrentModalState = TorrentModalState(playerScreen.anime, playerScreen.episode)

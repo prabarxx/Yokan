@@ -66,6 +66,8 @@ import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
+import app.yokan.media.WatchHistoryManager
+import app.yokan.anilist.model.AniListMedia
 import org.openani.mediamp.MediaStatus
 import me.him188.ani.app.videoplayer.ui.progress.PlayerProgressSliderState
 import kotlinx.coroutines.CancellationException
@@ -180,12 +182,16 @@ fun VideoPlayerScreen(
     webStream: WebStreamSource? = null,
     episodeNumber: Int? = null,
     absoluteEpisodeNumber: Int? = null,
+    initialPositionMillis: Long = 0L,
+    animeForHistory: AniListMedia? = null,
     onChangeSource: (() -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val activity = remember(context) { context.findActivity() }
+
+    val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var loadingStatus by remember { mutableStateOf<String?>("Conectando con la red...") }
@@ -195,6 +201,9 @@ fun VideoPlayerScreen(
     var exoDuration by remember { mutableLongStateOf(0L) }
     var exoPosition by remember { mutableLongStateOf(0L) }
     var exoBufferedPosition by remember { mutableLongStateOf(0L) }
+    var hasSeekedToInitial by remember { mutableStateOf(initialPositionMillis <= 0L) }
+    var resumeToastShown by remember { mutableStateOf(false) }
+    var lastSavedPositionMs by remember { mutableLongStateOf(0L) }
 
     val coroutineExceptionHandler = remember {
         CoroutineExceptionHandler { _, throwable ->
@@ -277,6 +286,25 @@ fun VideoPlayerScreen(
                     window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                 }
             }
+            // Save final position before closing
+            val exo = (player as? LibassExoPlayerMediampPlayer)?.exoPlayer
+            if (animeForHistory != null && episodeNumber != null && exo != null) {
+                val finalPos = exo.currentPosition.coerceAtLeast(0L)
+                val finalDur = exo.duration.let { if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L }
+                if (finalPos > 10_000L && finalDur > 0L) {
+                    watchHistoryManager.saveProgress(
+                        animeId = animeForHistory.id,
+                        animeTitle = animeForHistory.title.displayTitle,
+                        animeRomaji = animeForHistory.title.romaji,
+                        animeEnglish = animeForHistory.title.english,
+                        coverUrl = animeForHistory.coverImage?.bestQualityUrl,
+                        episode = episodeNumber,
+                        totalEpisodes = animeForHistory.effectiveEpisodesCount,
+                        positionMillis = finalPos,
+                        durationMillis = finalDur,
+                    )
+                }
+            }
             runCatching { player.close() }
             runCatching { currentMediaData?.close() }
         }
@@ -345,6 +373,11 @@ fun VideoPlayerScreen(
                     if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
                         exoDuration = dur
                     }
+                    // Seek to saved position (continue watching)
+                    if (!hasSeekedToInitial && initialPositionMillis > 0L) {
+                        hasSeekedToInitial = true
+                        exoPlayer.seekTo(initialPositionMillis)
+                    }
                 }
             }
 
@@ -388,6 +421,24 @@ fun VideoPlayerScreen(
                             chunkStates = listOf(ChunkState.DONE, ChunkState.NONE),
                         )
                     }
+                }
+
+                // Save progress every 5s for "continue watching"
+                val currentPos = exo.currentPosition.coerceAtLeast(0L)
+                if (animeForHistory != null && episodeNumber != null && validDur > 0L &&
+                    currentPos > 10_000L && (currentPos - lastSavedPositionMs > 5_000L)) {
+                    lastSavedPositionMs = currentPos
+                    watchHistoryManager.saveProgress(
+                        animeId = animeForHistory.id,
+                        animeTitle = animeForHistory.title.displayTitle,
+                        animeRomaji = animeForHistory.title.romaji,
+                        animeEnglish = animeForHistory.title.english,
+                        coverUrl = animeForHistory.coverImage?.bestQualityUrl,
+                        episode = episodeNumber,
+                        totalEpisodes = animeForHistory.effectiveEpisodesCount,
+                        positionMillis = currentPos,
+                        durationMillis = validDur,
+                    )
                 }
             }
             delay(250)
