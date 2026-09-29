@@ -1,16 +1,13 @@
 package app.yokan.media
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import me.him188.ani.utils.logging.error
-import me.him188.ani.utils.logging.logger
+import org.json.JSONArray
+import org.json.JSONObject
 
-@Serializable
 data class WatchProgress(
     val animeId: Int,
     val animeTitle: String,
@@ -29,14 +26,49 @@ data class WatchProgress(
     /** Returns true if episode is considered finished (>=92% watched) */
     val isFinished: Boolean
         get() = progressFraction >= 0.92f
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("animeId", animeId)
+        put("animeTitle", animeTitle)
+        put("animeRomaji", animeRomaji)
+        put("animeEnglish", animeEnglish ?: JSONObject.NULL)
+        put("coverUrl", coverUrl ?: JSONObject.NULL)
+        put("episode", episode)
+        put("totalEpisodes", totalEpisodes)
+        put("positionMillis", positionMillis)
+        put("durationMillis", durationMillis)
+        put("lastWatchedTimestamp", lastWatchedTimestamp)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject): WatchProgress = WatchProgress(
+            animeId = o.getInt("animeId"),
+            animeTitle = o.optString("animeTitle", ""),
+            animeRomaji = o.optString("animeRomaji", ""),
+            animeEnglish = if (o.isNull("animeEnglish")) null else o.optString("animeEnglish"),
+            coverUrl = if (o.isNull("coverUrl")) null else o.optString("coverUrl"),
+            episode = o.optInt("episode", 1),
+            totalEpisodes = o.optInt("totalEpisodes", 0),
+            positionMillis = o.optLong("positionMillis", 0L),
+            durationMillis = o.optLong("durationMillis", 0L),
+            lastWatchedTimestamp = o.optLong("lastWatchedTimestamp", System.currentTimeMillis()),
+        )
+    }
 }
 
+/**
+ * Historial de "Continuar viendo".
+ *
+ * Usa org.json (incluido en Android) en vez de kotlinx.serialization: en builds release con R8
+ * la serialización puede fallar en silencio, y el logger de la app no tiene backend en Android,
+ * así que el fallo pasaba desapercibido (el historial aparecía en sesión pero no se persistía).
+ * Los logs van por android.util.Log con el tag "YokanHistory":
+ *   adb logcat -s YokanHistory
+ */
 class WatchHistoryManager private constructor(context: Context) {
 
-    private val logger = logger("WatchHistoryManager")
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("yokan_watch_history", Context.MODE_PRIVATE)
-    private val json = Json { ignoreUnknownKeys = true }
 
     private val _history = MutableStateFlow<List<WatchProgress>>(emptyList())
     val allHistory: StateFlow<List<WatchProgress>> = _history.asStateFlow()
@@ -46,45 +78,34 @@ class WatchHistoryManager private constructor(context: Context) {
     }
 
     private fun loadHistory() {
-        val rawJson = prefs.getString(PREF_KEY, null)
-        if (rawJson == null) {
-            logger.info("Sin historial previo en disco (PREF_KEY ausente)")
+        val raw = prefs.getString(PREF_KEY, null)
+        if (raw == null) {
+            Log.i(TAG, "Sin historial previo en disco")
             return
         }
         runCatching {
-            val list = json.decodeFromString<List<WatchProgress>>(rawJson)
+            val arr = JSONArray(raw)
+            val list = (0 until arr.length()).map { WatchProgress.fromJson(arr.getJSONObject(it)) }
             _history.value = list.sortedByDescending { it.lastWatchedTimestamp }
-            logger.info("Historial cargado desde disco: ${list.size} entradas")
+            Log.i(TAG, "Historial cargado desde disco: ${list.size} entradas")
         }.onFailure {
-            logger.error("Failed to load watch history", it)
+            Log.e(TAG, "No se pudo leer el historial (${raw.length} chars)", it)
         }
     }
 
     private fun saveHistory(items: List<WatchProgress>) {
         _history.value = items
-        // Escritura SÍNCRONA con commit(): el JSON es diminuto (máx. 30 entradas)
-        // y así el dato queda en disco antes de que el proceso pueda morir.
-        // Con apply() + scope.launch() el guardado quedaba encolado y se perdía
-        // al cerrar la app (back + swipe), que es por lo que "Continuar viendo"
-        // aparecía en sesión pero desaparecía al reiniciar.
         runCatching {
-            val encoded = json.encodeToString(items)
-            val ok = prefs.edit().putString(PREF_KEY, encoded).commit()
-            if (!ok) {
-                logger.error("commit() devolvió false al guardar historial (${items.size} entradas)")
-                return@runCatching
-            }
-            // Verificación: releer y comprobar que lo escrito coincide.
-            val raw = prefs.getString(PREF_KEY, null)
-            if (raw == null) {
-                logger.error("Verificación falló: PREF_KEY ausente tras commit, reintentando...")
-                prefs.edit().putString(PREF_KEY, encoded).commit()
+            val arr = JSONArray()
+            items.forEach { arr.put(it.toJson()) }
+            val ok = prefs.edit().putString(PREF_KEY, arr.toString()).commit()
+            if (ok) {
+                Log.i(TAG, "Historial guardado: ${items.size} entradas")
             } else {
-                val count = runCatching { json.decodeFromString<List<WatchProgress>>(raw).size }.getOrNull()
-                logger.info("Historial guardado y verificado: ${items.size} entradas (leídas: $count)")
+                Log.e(TAG, "commit() devolvió false al guardar ${items.size} entradas")
             }
         }.onFailure {
-            logger.error("Failed to save watch history", it)
+            Log.e(TAG, "No se pudo guardar el historial", it)
         }
     }
 
@@ -143,6 +164,7 @@ class WatchHistoryManager private constructor(context: Context) {
     }
 
     companion object {
+        private const val TAG = "YokanHistory"
         private const val PREF_KEY = "watch_history_json"
 
         @Volatile
