@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -52,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -78,6 +80,7 @@ fun AnimeDetailsScreen(
     val context = LocalContext.current
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
     val watchHistory by watchHistoryManager.allHistory.collectAsState()
+    val watchedEpisodesMap by watchHistoryManager.watchedEpisodes.collectAsState()
 
     var animeDetails by remember { mutableStateOf<AniListMedia?>(initialAnime) }
     var isLoading by remember { mutableStateOf(animeDetails == null) }
@@ -109,6 +112,8 @@ fun AnimeDetailsScreen(
         }
 
         val totalEps = anime.effectiveEpisodesCount
+        val watchedSet = watchedEpisodesMap[anime.id].orEmpty()
+        val latestAired = anime.latestAiredEpisode
         val savedProgress = watchHistory.firstOrNull { it.animeId == anime.id }
         val hasSavedProgress = savedProgress != null && !savedProgress.isFinished
         val buttonEpisode = if (hasSavedProgress) savedProgress!!.episode else 1
@@ -121,7 +126,7 @@ fun AnimeDetailsScreen(
                 "Continuar — Ep $buttonEpisode"
             }
         } else {
-            "Comenzar a ver (Ep 1)"
+            if (watchedSet.isNotEmpty()) "Ver de nuevo (Ep 1)" else "Comenzar a ver (Ep 1)"
         }
 
         Column(
@@ -361,7 +366,11 @@ fun AnimeDetailsScreen(
                     }
                     if (statusLabel != null) {
                         Text(
-                            text = "$statusLabel · $totalEps eps",
+                            text = if (watchedSet.isNotEmpty()) {
+                                "${watchedSet.size}/$totalEps vistos · $statusLabel"
+                            } else {
+                                "$statusLabel · $totalEps eps"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -385,6 +394,9 @@ fun AnimeDetailsScreen(
                     items(totalEps) { index ->
                         val epNum = index + 1
                         val isCurrentEpisode = hasSavedProgress && epNum == savedProgress?.episode
+                        val isWatched = epNum in watchedSet
+                        // Episodio aún no emitido (solo se sabe en animes en emisión)
+                        val isUnaired = latestAired > 0 && epNum > latestAired
 
                         val containerColor = when {
                             isCurrentEpisode -> MaterialTheme.colorScheme.primaryContainer
@@ -392,6 +404,7 @@ fun AnimeDetailsScreen(
                         }
                         val epNumColor = when {
                             isCurrentEpisode -> MaterialTheme.colorScheme.primary
+                            isWatched -> MaterialTheme.colorScheme.onSurfaceVariant
                             else -> MaterialTheme.colorScheme.onSurface
                         }
 
@@ -399,8 +412,9 @@ fun AnimeDetailsScreen(
                             modifier = Modifier
                                 .width(72.dp)
                                 .height(64.dp)
+                                .alpha(if (isUnaired) 0.4f else 1f)
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable { onEpisodeClick(anime, epNum) },
+                                .clickable(enabled = !isUnaired) { onEpisodeClick(anime, epNum) },
                             color = containerColor,
                             shape = RoundedCornerShape(12.dp),
                         ) {
@@ -418,13 +432,36 @@ fun AnimeDetailsScreen(
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                 )
-                                Text(
-                                    text = "Ep $epNum",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                when {
+                                    isUnaired -> Text(
+                                        text = "Pronto",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                    )
+                                    isWatched -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(12.dp),
+                                        )
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Text(
+                                            text = "Visto",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                    else -> Text(
+                                        text = "Ep $epNum",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }

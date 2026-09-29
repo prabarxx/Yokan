@@ -1,7 +1,8 @@
 package app.yokan.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,13 +12,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudOff
@@ -36,13 +40,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,7 +67,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,6 +78,7 @@ import androidx.compose.ui.unit.sp
 import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
 import app.yokan.media.WatchHistoryManager
+import app.yokan.media.WatchProgress
 import app.yokan.ui.components.AnimePosterCard
 import app.yokan.ui.components.TrendingCarousel
 import app.yokan.ui.state.HomeCache
@@ -77,7 +92,7 @@ import me.him188.ani.app.ui.foundation.AsyncImage
 import me.him188.ani.app.ui.foundation.theme.appChromeHazeSource
 import me.him188.ani.app.ui.subject.SubjectGridDefaults
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     aniListClient: AniListClient,
@@ -105,6 +120,19 @@ fun HomeScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var openingAnimeId by remember { mutableStateOf<Int?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val haptics = LocalHapticFeedback.current
+
+    // Recuerda el scroll de la grilla principal al abrir un detalle y volver
+    val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = HomeCache.gridScrollIndex,
+        initialFirstVisibleItemScrollOffset = HomeCache.gridScrollOffset,
+    )
+    DisposableEffect(Unit) {
+        onDispose {
+            HomeCache.gridScrollIndex = gridState.firstVisibleItemIndex
+            HomeCache.gridScrollOffset = gridState.firstVisibleItemScrollOffset
+        }
+    }
 
     val layoutParams = SubjectGridDefaults.coverLayoutParameters()
 
@@ -168,6 +196,22 @@ fun HomeScreen(
         if (!HomeCache.isLoaded) {
             isLoading = true
             refresh()
+        }
+    }
+
+    /** Quita una tarjeta de "Continuar viendo" (pulsación larga) con opción de deshacer. */
+    fun removeFromHistory(progress: WatchProgress) {
+        watchHistoryManager.removeProgress(progress.animeId)
+        coroutineScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = "Quitado de Continuar viendo",
+                actionLabel = "Deshacer",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                watchHistoryManager.restoreProgress(progress)
+            }
         }
     }
 
@@ -250,14 +294,14 @@ fun HomeScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (isLoading) {
-            Box(
+            HomeSkeleton(
+                gridCells = layoutParams.gridCells,
+                horizontalArrangement = layoutParams.horizontalArrangement,
+                verticalArrangement = layoutParams.verticalArrangement,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
+            )
             return@Scaffold
         }
 
@@ -332,6 +376,7 @@ fun HomeScreen(
             ) {
                 LazyVerticalGrid(
                     columns = layoutParams.gridCells,
+                    state = gridState,
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
                     horizontalArrangement = layoutParams.horizontalArrangement,
                     verticalArrangement = layoutParams.verticalArrangement,
@@ -368,7 +413,13 @@ fun HomeScreen(
                                     Card(
                                         modifier = Modifier
                                             .width(130.dp)
-                                            .clickable(enabled = openingAnimeId == null) {
+                                            .combinedClickable(
+                                                enabled = openingAnimeId == null,
+                                                onLongClick = {
+                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    removeFromHistory(progress)
+                                                },
+                                            ) {
                                                 val cached = (trendingList + popularList + searchResults)
                                                     .firstOrNull { it.id == progress.animeId }
                                                 if (cached != null) {
@@ -530,6 +581,82 @@ private fun HomeErrorState(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text("Reintentar")
+        }
+    }
+}
+
+/** Marcador de posición con pulso suave mientras carga el catálogo. */
+@Composable
+private fun HomeSkeleton(
+    gridCells: GridCells,
+    horizontalArrangement: Arrangement.Horizontal,
+    verticalArrangement: Arrangement.Vertical,
+    modifier: Modifier = Modifier,
+) {
+    val transition = rememberInfiniteTransition(label = "skeleton")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 800), RepeatMode.Reverse),
+        label = "skeletonPulse",
+    )
+    val color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = pulse)
+
+    LazyVerticalGrid(
+        columns = gridCells,
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
+        horizontalArrangement = horizontalArrangement,
+        verticalArrangement = verticalArrangement,
+        userScrollEnabled = false,
+        modifier = modifier,
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(modifier = Modifier.padding(bottom = 12.dp)) {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 8.dp)
+                        .width(160.dp)
+                        .height(18.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(color),
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(color),
+                )
+            }
+        }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Box(
+                modifier = Modifier
+                    .padding(vertical = 8.dp)
+                    .width(120.dp)
+                    .height(18.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(color),
+            )
+        }
+        items(9) {
+            Column {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(0.7f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(color),
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.7f)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(color),
+                )
+            }
         }
     }
 }

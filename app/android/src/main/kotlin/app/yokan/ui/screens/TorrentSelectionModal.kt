@@ -59,6 +59,7 @@ import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class TorrentFilter {
     ALL, P1080, P720, SPANISH
@@ -74,6 +75,7 @@ fun TorrentSelectionModal(
     onTorrentSelect: (NyaaTorrent) -> Unit,
     onWebStreamSelect: (WebStreamSource) -> Unit,
     onDismiss: () -> Unit,
+    notice: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val coroutineScope = rememberCoroutineScope()
@@ -108,8 +110,11 @@ fun TorrentSelectionModal(
             }.getOrDefault(emptyList())
         }
 
-        allTorrents = torrentDeferred.await()
-        allWebSources = webDeferred.await()
+        // Si un origen no responde en 12 s se sigue con lo que haya, en vez de dejar el spinner colgado
+        allTorrents = withTimeoutOrNull(12_000L) { torrentDeferred.await() } ?: emptyList()
+        allWebSources = withTimeoutOrNull(12_000L) { webDeferred.await() } ?: emptyList()
+        torrentDeferred.cancel()
+        webDeferred.cancel()
 
         // Seleccionar pestaña por defecto: si hay fuentes web (con UPN), abrir en Web Streaming
         selectedCategoryTab = if (allWebSources.isNotEmpty()) 0 else 1
@@ -159,6 +164,15 @@ fun TorrentSelectionModal(
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Rounded.Close, contentDescription = "Cerrar")
                 }
+            }
+
+            if (notice != null) {
+                Text(
+                    text = notice,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))

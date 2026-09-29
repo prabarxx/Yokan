@@ -23,6 +23,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import me.him188.ani.utils.coroutines.IO_
 
@@ -182,6 +183,10 @@ class AniListClient(
                     averageScore
                     genres
                     status
+                    nextAiringEpisode {
+                      episode
+                      airingAt
+                    }
                     synonyms
                     relations {
                       edges {
@@ -296,6 +301,11 @@ class AniListClient(
         val averageScore = obj["averageScore"]?.jsonPrimitive?.intOrNull
         val status = obj["status"]?.jsonPrimitive?.contentOrNull
 
+        // nextAiringEpisode llega como JsonNull cuando no hay próximo episodio: `as?` lo trata como null
+        val nextAiringObj = obj["nextAiringEpisode"] as? kotlinx.serialization.json.JsonObject
+        val nextAiringEpisode = nextAiringObj?.get("episode")?.jsonPrimitive?.intOrNull
+        val nextAiringAt = nextAiringObj?.get("airingAt")?.jsonPrimitive?.longOrNull
+
         val genres = obj["genres"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
         val synonyms = obj["synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
 
@@ -344,6 +354,8 @@ class AniListClient(
             streamingEpisodes = streamingEpisodes,
             synonyms = synonyms,
             previousEpisodesCount = previousEpisodes,
+            nextAiringEpisode = nextAiringEpisode,
+            nextAiringAt = nextAiringAt,
         )
     }
 }

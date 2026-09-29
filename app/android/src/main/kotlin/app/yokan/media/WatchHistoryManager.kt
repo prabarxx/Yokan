@@ -73,8 +73,13 @@ class WatchHistoryManager private constructor(context: Context) {
     private val _history = MutableStateFlow<List<WatchProgress>>(emptyList())
     val allHistory: StateFlow<List<WatchProgress>> = _history.asStateFlow()
 
+    /** Episodios vistos (>= 92 %) por anime. Independiente de "Continuar viendo": quitar una tarjeta no los borra. */
+    private val _watched = MutableStateFlow<Map<Int, Set<Int>>>(emptyMap())
+    val watchedEpisodes: StateFlow<Map<Int, Set<Int>>> = _watched.asStateFlow()
+
     init {
         loadHistory()
+        loadWatched()
     }
 
     private fun loadHistory() {
@@ -123,6 +128,7 @@ class WatchHistoryManager private constructor(context: Context) {
         totalEpisodes: Int,
         positionMillis: Long,
         durationMillis: Long,
+        latestAiredEpisode: Int = 0,
     ) {
         if (positionMillis < 10_000L) return
 
@@ -139,9 +145,13 @@ class WatchHistoryManager private constructor(context: Context) {
             lastWatchedTimestamp = System.currentTimeMillis(),
         )
 
+        if (watched.isFinished) markEpisodeWatched(animeId, episode)
+
         // Episodio terminado (>= 92 %): "Continuar viendo" avanza al siguiente (N+1, desde 0:00)
-        // en lugar de desaparecer. Solo se oculta cuando era el último episodio.
-        val progress = if (watched.isFinished && (totalEpisodes == 0 || episode < totalEpisodes)) {
+        // en lugar de desaparecer. Solo se oculta si era el último episodio o si el N+1 aún no se emitió.
+        val hasNext = (totalEpisodes == 0 || episode < totalEpisodes) &&
+            (latestAiredEpisode == 0 || episode < latestAiredEpisode)
+        val progress = if (watched.isFinished && hasNext) {
             watched.copy(episode = episode + 1, positionMillis = 0L, durationMillis = 0L)
         } else {
             watched
@@ -160,6 +170,41 @@ class WatchHistoryManager private constructor(context: Context) {
         saveHistory(trimmed)
     }
 
+    private fun loadWatched() {
+        val raw = prefs.getString(PREF_WATCHED_KEY, null) ?: return
+        runCatching {
+            val obj = JSONObject(raw)
+            val map = mutableMapOf<Int, Set<Int>>()
+            obj.keys().forEach { key ->
+                val arr = obj.getJSONArray(key)
+                map[key.toInt()] = (0 until arr.length()).map { arr.getInt(it) }.toSet()
+            }
+            _watched.value = map
+        }.onFailure {
+            Log.e(TAG, "No se pudieron leer los episodios vistos", it)
+        }
+    }
+
+    private fun markEpisodeWatched(animeId: Int, episode: Int) {
+        val current = _watched.value[animeId].orEmpty()
+        if (episode in current) return
+        val updated = _watched.value + (animeId to (current + episode))
+        _watched.value = updated
+        runCatching {
+            val obj = JSONObject()
+            updated.forEach { (id, eps) -> obj.put(id.toString(), JSONArray(eps.toList())) }
+            prefs.edit().putString(PREF_WATCHED_KEY, obj.toString()).commit()
+        }.onFailure {
+            Log.e(TAG, "No se pudieron guardar los episodios vistos", it)
+        }
+    }
+
+    /** Devuelve una entrada al historial tal cual estaba (para "Deshacer" al quitarla). */
+    fun restoreProgress(progress: WatchProgress) {
+        val current = _history.value.filter { it.animeId != progress.animeId } + progress
+        saveHistory(current.sortedByDescending { it.lastWatchedTimestamp }.take(30))
+    }
+
     /** Returns the saved progress for an anime, or null if not found. */
     fun getProgress(animeId: Int): WatchProgress? {
         return _history.value.firstOrNull { it.animeId == animeId }
@@ -174,6 +219,7 @@ class WatchHistoryManager private constructor(context: Context) {
     companion object {
         private const val TAG = "YokanHistory"
         private const val PREF_KEY = "watch_history_json"
+        private const val PREF_WATCHED_KEY = "watched_episodes_json"
 
         @Volatile
         private var instance: WatchHistoryManager? = null

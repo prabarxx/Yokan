@@ -52,6 +52,8 @@ data class AniListMedia(
     val streamingEpisodes: List<AniListStreamingEpisode> = emptyList(),
     val synonyms: List<String> = emptyList(),
     val previousEpisodesCount: Int? = null,
+    val nextAiringEpisode: Int? = null,
+    val nextAiringAt: Long? = null,
 ) {
     val displayScore: String
         get() = averageScore?.let { "$it%" } ?: "N/A"
@@ -66,6 +68,20 @@ data class AniListMedia(
 
     val effectiveEpisodesCount: Int
         get() = episodes ?: streamingEpisodes.size.takeIf { it > 0 } ?: 0
+
+    /**
+     * Último episodio ya emitido. Solo se conoce si el anime está en emisión y AniList informa el próximo.
+     * 0 = desconocido / sin límite.
+     */
+    val latestAiredEpisode: Int
+        get() {
+            val next = nextAiringEpisode
+            return if (status.equals("RELEASING", ignoreCase = true) && next != null) {
+                (next - 1).coerceAtLeast(0)
+            } else {
+                0
+            }
+        }
 
     val absoluteEpisodeOffset: Int
         get() = previousEpisodesCount ?: 0

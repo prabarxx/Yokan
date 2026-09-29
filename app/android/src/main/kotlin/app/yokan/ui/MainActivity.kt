@@ -51,6 +51,7 @@ import app.yokan.ui.state.HomeCache
 import app.yokan.media.WatchHistoryManager
 import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuite
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuiteLayout
 import me.him188.ani.app.ui.foundation.LocalSketch
@@ -92,6 +93,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Tiempo máximo de cada intento automático antes de ofrecer el selector manual
+private const val WEB_RESOLVE_TIMEOUT_MS = 8_000L
+private const val TORRENT_RESOLVE_TIMEOUT_MS = 10_000L
+
 private sealed interface Screen {
     data object Home : Screen
     data object Cache : Screen
@@ -109,6 +114,7 @@ private sealed interface Screen {
 private data class TorrentModalState(
     val anime: AniListMedia,
     val episode: Int,
+    val notice: String? = null,
 )
 
 private data class ResolvingEpisodeState(
@@ -129,6 +135,7 @@ private fun YokanApp(
     var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
     var resolvingEpisodeState by remember { mutableStateOf<ResolvingEpisodeState?>(null) }
     var selectedNavTab by remember { mutableStateOf(0) }
+    var resolvingStage by remember { mutableStateOf("Servidores web") }
 
     // Auto-Resolver Híbrido:
     // 1. Intento prioritario por AnimeAV1 (servidor MP4Upload por defecto: el más rápido y estable)
@@ -146,13 +153,16 @@ private fun YokanApp(
         } else 0L
 
         // Intento 1: AnimeAV1 (MP4Upload primero)
-        val webStreamResult = animeAV1Client.resolveBestStream(
-            romajiTitle = state.anime.title.romaji,
-            englishTitle = state.anime.title.english,
-            episodeNumber = state.episode,
-        )
+        resolvingStage = "Servidores web"
+        val webStreamResult = withTimeoutOrNull(WEB_RESOLVE_TIMEOUT_MS) {
+            animeAV1Client.resolveBestStream(
+                romajiTitle = state.anime.title.romaji,
+                englishTitle = state.anime.title.english,
+                episodeNumber = state.episode,
+            )
+        }
 
-        val bestWebStream = webStreamResult.getOrNull()
+        val bestWebStream = webStreamResult?.getOrNull()
         if (bestWebStream != null) {
             resolvingEpisodeState = null
             currentScreen = Screen.Player(
@@ -167,14 +177,28 @@ private fun YokanApp(
 
         // Intento 2: Nyaa Torrents
         val absEpisode = state.anime.calculateAbsoluteEpisode(state.episode).takeIf { it != state.episode }
-        val bestTorrentResult = nyaaSearchEngine.resolveBestTorrent(
-            romajiTitle = state.anime.title.romaji,
-            englishTitle = state.anime.title.english,
-            synonyms = state.anime.synonyms,
-            episodeNumber = state.episode,
-            absoluteEpisodeNumber = absEpisode,
-            totalEpisodes = state.anime.effectiveEpisodesCount,
-        )
+        resolvingStage = "Torrents"
+        val bestTorrentResult = withTimeoutOrNull(TORRENT_RESOLVE_TIMEOUT_MS) {
+            nyaaSearchEngine.resolveBestTorrent(
+                romajiTitle = state.anime.title.romaji,
+                englishTitle = state.anime.title.english,
+                synonyms = state.anime.synonyms,
+                episodeNumber = state.episode,
+                absoluteEpisodeNumber = absEpisode,
+                totalEpisodes = state.anime.effectiveEpisodesCount,
+            )
+        }
+
+        if (bestTorrentResult == null) {
+            // Tiempo agotado: se abre el selector manual explicando por qué
+            resolvingEpisodeState = null
+            torrentModalState = TorrentModalState(
+                state.anime,
+                state.episode,
+                notice = "La búsqueda automática tardó demasiado. Elige una fuente.",
+            )
+            return@LaunchedEffect
+        }
 
         bestTorrentResult.fold(
             onSuccess = { bestTorrent ->
@@ -188,12 +212,20 @@ private fun YokanApp(
                         previousScreen = prev,
                     )
                 } else {
-                    torrentModalState = TorrentModalState(state.anime, state.episode)
+                    torrentModalState = TorrentModalState(
+                        state.anime,
+                        state.episode,
+                        notice = "No se encontró una fuente automática. Elige una manualmente.",
+                    )
                 }
             },
             onFailure = {
                 resolvingEpisodeState = null
-                torrentModalState = TorrentModalState(state.anime, state.episode)
+                torrentModalState = TorrentModalState(
+                    state.anime,
+                    state.episode,
+                    notice = "No se pudo buscar automáticamente. Elige una manualmente.",
+                )
             }
         )
     }
@@ -257,7 +289,10 @@ private fun YokanApp(
             onNextEpisode = if (
                 playerScreen.anime != null && playerScreen.episode != null &&
                 (playerScreen.anime.effectiveEpisodesCount == 0 ||
-                    playerScreen.episode < playerScreen.anime.effectiveEpisodesCount)
+                    playerScreen.episode < playerScreen.anime.effectiveEpisodesCount) &&
+                // No ofrecer un episodio que aún no se emitió
+                (playerScreen.anime.latestAiredEpisode == 0 ||
+                    playerScreen.episode < playerScreen.anime.latestAiredEpisode)
             ) {
                 {
                     resolvingEpisodeState =
@@ -382,9 +417,14 @@ private fun YokanApp(
                 ) {
                     CircularProgressIndicator()
                     Text(
-                        text = "Seleccionando la mejor fuente...",
+                        text = "Buscando la mejor fuente...",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = "Probando: $resolvingStage",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                     Text(
                         text = "Episodio ${state.episode} • ${state.anime.title.displayTitle}",
@@ -411,6 +451,7 @@ private fun YokanApp(
         TorrentSelectionModal(
             anime = modal.anime,
             episodeNumber = modal.episode,
+            notice = modal.notice,
             searchEngine = nyaaSearchEngine,
             animeAV1Client = animeAV1Client,
             onTorrentSelect = { torrent ->

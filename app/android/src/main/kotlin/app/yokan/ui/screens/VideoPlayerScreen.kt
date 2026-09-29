@@ -301,6 +301,7 @@ fun VideoPlayerScreen(
                 coverUrl = animeForHistory.coverImage?.bestQualityUrl,
                 episode = episodeNumber,
                 totalEpisodes = animeForHistory.effectiveEpisodesCount,
+                latestAiredEpisode = animeForHistory.latestAiredEpisode,
                 positionMillis = dur,
                 durationMillis = dur,
             )
@@ -388,6 +389,7 @@ fun VideoPlayerScreen(
                         coverUrl = animeForHistory.coverImage?.bestQualityUrl,
                         episode = episodeNumber,
                         totalEpisodes = animeForHistory.effectiveEpisodesCount,
+                        latestAiredEpisode = animeForHistory.latestAiredEpisode,
                         positionMillis = finalPos,
                         durationMillis = finalDur,
                     )
@@ -538,6 +540,7 @@ fun VideoPlayerScreen(
                         coverUrl = animeForHistory.coverImage?.bestQualityUrl,
                         episode = episodeNumber,
                         totalEpisodes = animeForHistory.effectiveEpisodesCount,
+                        latestAiredEpisode = animeForHistory.latestAiredEpisode,
                         positionMillis = currentPos,
                         durationMillis = effectiveDur,
                     )
