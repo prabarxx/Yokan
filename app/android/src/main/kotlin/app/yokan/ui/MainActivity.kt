@@ -27,6 +27,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -134,7 +135,8 @@ private fun YokanApp(
     // 2. Fallback a la red BitTorrent (Nyaa / Erai-raws) si no está disponible en la web
     LaunchedEffect(resolvingEpisodeState) {
         val state = resolvingEpisodeState ?: return@LaunchedEffect
-        val prev = currentScreen
+        // Si se pide desde el reproductor (siguiente episodio), "atrás" debe volver a donde estaba antes
+        val prev = (currentScreen as? Screen.Player)?.previousScreen ?: currentScreen
 
         // Look up saved progress for "continuar viendo"
         val savedProgress = watchHistoryManager.getProgress(state.anime.id)
@@ -221,6 +223,23 @@ private fun YokanApp(
 
     if (currentScreen is Screen.Player) {
         val playerScreen = currentScreen as Screen.Player
+        // Precarga el episodio siguiente mientras se ve el actual
+        LaunchedEffect(playerScreen.anime?.id, playerScreen.episode) {
+            val anime = playerScreen.anime ?: return@LaunchedEffect
+            val ep = playerScreen.episode ?: return@LaunchedEffect
+            animeAV1Client.prefetchEpisode(
+                romajiTitle = anime.title.romaji,
+                englishTitle = anime.title.english,
+                episodeNumber = ep + 1,
+            )
+        }
+        // key: recrea el reproductor limpio al cambiar de episodio o de fuente
+        key(
+            playerScreen.anime?.id,
+            playerScreen.episode,
+            playerScreen.webStream?.streamUrl,
+            playerScreen.torrent?.magnetUrl,
+        ) {
         VideoPlayerScreen(
             torrent = playerScreen.torrent,
             webStream = playerScreen.webStream,
@@ -235,10 +254,32 @@ private fun YokanApp(
                     torrentModalState = TorrentModalState(playerScreen.anime, playerScreen.episode)
                 }
             } else null,
+            onNextEpisode = if (
+                playerScreen.anime != null && playerScreen.episode != null &&
+                (playerScreen.anime.effectiveEpisodesCount == 0 ||
+                    playerScreen.episode < playerScreen.anime.effectiveEpisodesCount)
+            ) {
+                {
+                    resolvingEpisodeState =
+                        ResolvingEpisodeState(playerScreen.anime, playerScreen.episode + 1)
+                }
+            } else null,
+            onResolveNextWebSource = if (playerScreen.anime != null && playerScreen.episode != null) {
+                { failed, tried ->
+                    animeAV1Client.resolveNextStream(
+                        romajiTitle = playerScreen.anime.title.romaji,
+                        englishTitle = playerScreen.anime.title.english,
+                        episodeNumber = playerScreen.episode,
+                        triedServers = tried,
+                        failed = failed,
+                    )
+                }
+            } else null,
             onBack = {
                 currentScreen = playerScreen.previousScreen
             },
         )
+        }
     } else {
         AniNavigationSuiteLayout(
             navigationSuite = {

@@ -6,6 +6,8 @@ import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import me.him188.ani.utils.logging.logger
 import java.net.URLEncoder
@@ -330,37 +332,51 @@ class AnimeAV1Client(
             // Filtrar preferentemente pistas SUB
             val subSources = sources.filter { !it.isDub }.ifEmpty { sources }
 
-            // 1. Probar servidores en orden de prioridad y verificar que el stream esté vivo
-            var firstValidStream: WebStreamSource? = null
-            for (source in subSources) {
-                val res = resolveStream(source)
-                if (res.isSuccess) {
-                    val candidate = res.getOrNull()
-                    if (candidate != null) {
-                        if (firstValidStream == null) {
-                            firstValidStream = candidate
-                        }
-                        val isAlive = verifyStreamUrlAlive(candidate.streamUrl, candidate.headers)
-                        if (isAlive) {
-                            logger.info("Fuente funcional confirmada: ${source.server} -> ${candidate.streamUrl}")
-                            return@runCatching candidate
-                        } else {
-                            logger.warn("El servidor ${source.server} devolvió un enlace caído/404, probando siguiente espejo...")
-                            resolvedStreamCache.remove(source.embedUrl)
+            // Resolver en PARALELO los 3 mejores servidores y devolver el primero (por prioridad)
+            // que resuelva bien. Ya no se hace verifyStreamUrlAlive en el camino crítico:
+            // ExoPlayer falla rápido si el enlace está caído y el usuario puede cambiar de fuente.
+            coroutineScope {
+                val deferred = subSources.take(3).map { src -> async { resolveStream(src) } }
+                try {
+                    for (d in deferred) {
+                        val stream = d.await().getOrNull()
+                        if (stream != null) {
+                            logger.info("Fuente resuelta: ${stream.serverName} -> ${stream.streamUrl}")
+                            return@coroutineScope stream
                         }
                     }
+                    null
+                } finally {
+                    deferred.forEach { it.cancel() }
                 }
             }
-
-            // Si la verificación estricta falló en todos (por ejemplo por políticas de cabecera de la CDN),
-            // usar el primer stream resuelto como salvavidas en vez de abortar
-            if (firstValidStream != null) {
-                logger.info("Usando stream de respaldo sin verificación estricta: ${firstValidStream.serverName}")
-                return@runCatching firstValidStream
-            }
-
-            null
         }
+    }
+
+    /**
+     * Fallback automático: devuelve el siguiente servidor SUB que resuelva bien, saltando los ya probados.
+     * Invalida en caché el stream que falló para que no se vuelva a servir en la próxima reproducción.
+     */
+    suspend fun resolveNextStream(
+        romajiTitle: String,
+        englishTitle: String?,
+        episodeNumber: Int,
+        triedServers: Set<String>,
+        failed: WebStreamSource? = null,
+    ): WebStreamSource? = withContext(Dispatchers.IO) {
+        failed?.let { f -> resolvedStreamCache.entries.removeAll { it.value.streamUrl == f.streamUrl } }
+        runCatching {
+            val slug = resolveSlug(romajiTitle, englishTitle)
+            val sources = getEpisodeSources(slug, episodeNumber)
+            val subs = sources.filter { !it.isDub }.ifEmpty { sources }
+            for (src in subs) {
+                if (triedServers.any { it.equals(src.server, ignoreCase = true) }) continue
+                val stream = resolveStream(src).getOrNull() ?: continue
+                logger.info("Fallback -> ${stream.serverName}: ${stream.streamUrl}")
+                return@runCatching stream
+            }
+            null
+        }.getOrNull()
     }
 
     /**

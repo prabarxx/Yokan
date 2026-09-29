@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,7 +60,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -185,6 +186,8 @@ fun VideoPlayerScreen(
     initialPositionMillis: Long = 0L,
     animeForHistory: AniListMedia? = null,
     onChangeSource: (() -> Unit)? = null,
+    onNextEpisode: (() -> Unit)? = null,
+    onResolveNextWebSource: (suspend (failed: WebStreamSource, triedServers: Set<String>) -> WebStreamSource?)? = null,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -222,6 +225,44 @@ fun VideoPlayerScreen(
     }
 
     val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
+
+    // --- Fallback automático entre servidores web ---
+    var activeWebStream by remember { mutableStateOf(webStream) }
+    val triedWebServers = remember { mutableSetOf<String>() }
+    var webSourceReady by remember { mutableStateOf(false) }
+    var isSwitchingWebSource by remember { mutableStateOf(false) }
+    var resumeAfterFallbackMs by remember { mutableLongStateOf(-1L) }
+    val currentResolveNext by rememberUpdatedState(onResolveNextWebSource)
+
+    /** Pasa al siguiente servidor. Devuelve true si inició el cambio (o ya hay uno en curso). */
+    fun switchToNextWebSource(reason: String): Boolean {
+        val failed = activeWebStream ?: return false
+        val resolver = currentResolveNext ?: return false
+        if (isSwitchingWebSource) return true
+        isSwitchingWebSource = true
+        triedWebServers.add(failed.serverName)
+        val pos = exoPlayer?.currentPosition ?: 0L
+        if (pos > 5_000L) resumeAfterFallbackMs = pos
+        errorMessage = null
+        loadingStatus = "${failed.serverName} falló ($reason). Probando otro servidor..."
+        coroutineScope.launch {
+            val next = try {
+                resolver(failed, triedWebServers.toSet())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                null
+            }
+            isSwitchingWebSource = false
+            if (next != null) {
+                activeWebStream = next
+            } else {
+                loadingStatus = null
+                errorMessage = "No hay más servidores disponibles para este episodio."
+            }
+        }
+        return true
+    }
 
     // Posición/duración efectivas: en vía web (AnimeAV1) van por exoPlayer,
     // en vía torrent van por el reproductor mediamp. El slider ya usa este
@@ -375,6 +416,7 @@ fun VideoPlayerScreen(
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 logger.error("ExoPlayer error: ${error.message} (code=${error.errorCode})", error)
+                if (activeWebStream != null && switchToNextWebSource("error ${error.errorCode}")) return
                 errorMessage = "Error de reproducción: ${error.localizedMessage ?: error.message}"
                 loadingStatus = null
             }
@@ -388,6 +430,13 @@ fun VideoPlayerScreen(
                     val dur = exoPlayer.duration
                     if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
                         exoDuration = dur
+                    }
+                    webSourceReady = true
+                    // Tras un fallback, retomar donde iba el video anterior
+                    if (resumeAfterFallbackMs > 0L) {
+                        exoPlayer.seekTo(resumeAfterFallbackMs)
+                        resumeAfterFallbackMs = -1L
+                        hasSeekedToInitial = true
                     }
                     // Seek to saved position (continue watching)
                     if (!hasSeekedToInitial && initialPositionMillis > 0L) {
@@ -474,8 +523,9 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(webStream?.streamUrl) {
-        val stream = webStream ?: return@LaunchedEffect
+    LaunchedEffect(activeWebStream?.streamUrl) {
+        val stream = activeWebStream ?: return@LaunchedEffect
+        webSourceReady = false
         loadingStatus = "Cargando stream web de AnimeAV1 (${stream.serverName})..."
         errorMessage = null
         try {
@@ -495,12 +545,12 @@ fun VideoPlayerScreen(
             }
             headers["Accept"] = "*/*"
 
-            val dataSourceFactory = DefaultHttpDataSource.Factory()
+            // OkHttp compartido: HTTP/2, reutilización de conexiones y pool (mucho mejor para HLS)
+            val dataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(
+                app.yokan.media.PlayerHttp.client
+            )
                 .setUserAgent(headers["User-Agent"]!!)
                 .setDefaultRequestProperties(headers)
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(8_000)
-                .setReadTimeoutMs(10_000)
 
             val isHlsStream = stream.isHls ||
                 stream.streamUrl.contains(".m3u8", ignoreCase = true) ||
@@ -523,6 +573,13 @@ fun VideoPlayerScreen(
 
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
+            // Arrancar en 720p máx. para empezar rápido; ABR puede subir si se ajusta el límite
+            exoPlayer?.let { exo ->
+                exo.trackSelectionParameters = exo.trackSelectionParameters
+                    .buildUpon()
+                    .setMaxVideoSize(1280, 720)
+                    .build()
+            }
             exoPlayer?.setMediaSource(mediaSource)
             exoPlayer?.prepare()
             exoPlayer?.playWhenReady = true
@@ -533,6 +590,15 @@ fun VideoPlayerScreen(
             logger.error("Error al reproducir stream web: ${e.message}", e)
             errorMessage = "Error al reproducir stream: ${e.localizedMessage ?: e::class.simpleName}"
             loadingStatus = null
+        }
+    }
+
+    // Watchdog: si el servidor no llega a READY en 15 s, pasar al siguiente
+    LaunchedEffect(activeWebStream?.streamUrl) {
+        if (activeWebStream == null) return@LaunchedEffect
+        delay(15_000)
+        if (!webSourceReady && errorMessage == null && !isSwitchingWebSource) {
+            switchToNextWebSource("sin respuesta")
         }
     }
 
@@ -789,6 +855,33 @@ fun VideoPlayerScreen(
                     PlayerTopBar(
                         title = {},
                         actions = {
+                            if (onNextEpisode != null) {
+                                OutlinedButton(
+                                    onClick = onNextEpisode,
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color.White,
+                                        containerColor = Color.Black.copy(alpha = 0.5f)
+                                    ),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.7f)),
+                                    shape = RoundedCornerShape(16.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "Siguiente",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Icon(
+                                        Icons.Rounded.SkipNext,
+                                        contentDescription = "Siguiente episodio",
+                                        modifier = Modifier.size(18.dp),
+                                        tint = Color.White,
+                                    )
+                                }
+                            }
                             if (onChangeSource != null) {
                                 OutlinedButton(
                                     onClick = onChangeSource,
@@ -1045,6 +1138,14 @@ fun VideoPlayerScreen(
                         )
                         Spacer(Modifier.height(16.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (onNextEpisode != null) {
+                                OutlinedButton(
+                                    onClick = onNextEpisode,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                ) {
+                                    Text("Siguiente ep.", color = Color.White)
+                                }
+                            }
                             if (onChangeSource != null) {
                                 OutlinedButton(
                                     onClick = onChangeSource,
