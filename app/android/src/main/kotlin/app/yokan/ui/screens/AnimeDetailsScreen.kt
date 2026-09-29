@@ -115,7 +115,11 @@ fun AnimeDetailsScreen(
         val buttonLabel = if (hasSavedProgress) {
             val mins = (savedProgress!!.positionMillis / 1000) / 60
             val secs = (savedProgress.positionMillis / 1000) % 60
-            "Continuar — Ep $buttonEpisode (${mins}:${secs.toString().padStart(2, '0')})"
+            if (savedProgress.positionMillis >= 5_000L) {
+                "Continuar — Ep $buttonEpisode (${mins}:${secs.toString().padStart(2, '0')})"
+            } else {
+                "Continuar — Ep $buttonEpisode"
+            }
         } else {
             "Comenzar a ver (Ep 1)"
         }

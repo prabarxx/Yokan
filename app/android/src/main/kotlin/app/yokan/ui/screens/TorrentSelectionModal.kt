@@ -229,15 +229,10 @@ fun TorrentSelectionModal(
                         ) {
                             CircularProgressIndicator()
                             Text(
-                                text = "Conectando stream $resolvingServerName...",
+                                text = "Cargando...",
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Aplicando descifrado seguro y bloqueo de anuncios...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -289,7 +284,7 @@ fun TorrentSelectionModal(
                             items(allWebSources) { source ->
                                 AnimekoWebStreamCard(
                                     source = source,
-                                    isTopRecommended = source.isUpn,
+                                    isTopRecommended = source.isMp4Upload,
                                     onClick = {
                                         coroutineScope.launch {
                                             isResolvingWebStream = true

@@ -15,6 +15,8 @@ data class AnimeAV1Source(
 ) {
     val isUpn: Boolean get() = server.equals("UPNShare", ignoreCase = true) || embedUrl.contains("uns.bio", ignoreCase = true)
 
+    val isMp4Upload: Boolean get() = server.equals("MP4Upload", ignoreCase = true) || embedUrl.contains("mp4upload.com", ignoreCase = true)
+
     val displayName: String get() = when {
         isUpn -> "AnimeAV1 (UPN - HLS Directo)"
         server.equals("MP4Upload", ignoreCase = true) -> "AnimeAV1 (MP4Upload - 1080p)"

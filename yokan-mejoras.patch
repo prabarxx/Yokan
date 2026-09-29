@@ -1,0 +1,803 @@
+diff --git a/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Client.kt b/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Client.kt
+index 0ca9b67..07aae83 100644
+--- a/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Client.kt
++++ b/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Client.kt
+@@ -125,7 +125,7 @@ class AnimeAV1Client(
+ 
+     /**
+      * Extrae los servidores de reproducción (embeds) para un episodio determinado.
+-     * Prioriza estrictamente el servidor UPN (UPNShare / uns.bio) tal como se solicitó.
++     * Prioriza el servidor MP4Upload (el más rápido y estable), seguido de UPNShare.
+      */
+     suspend fun getEpisodeSources(slug: String, episodeNumber: Int): List<AnimeAV1Source> = withContext(Dispatchers.IO) {
+         val cacheKey = "$slug:$episodeNumber"
+@@ -168,15 +168,16 @@ class AnimeAV1Client(
+                 }
+             }
+ 
+-            // Ordenamiento prioritario:
+-            // 1. UPNShare / uns.bio primero (el más estable por defecto)
+-            // 2. MP4Upload
++            // Ordenamiento prioritario (SUB antes que DUB, y dentro de cada grupo):
++            // 1. MP4Upload primero (el más rápido y estable)
++            // 2. UPNShare / uns.bio
+             // 3. YourUpload
+             // 4. Voe
+             // 5. Otros
+             val sortedSources = sources.sortedWith(
+-                compareByDescending<AnimeAV1Source> { it.isUpn }
+-                    .thenByDescending { it.server.equals("MP4Upload", ignoreCase = true) }
++                compareBy<AnimeAV1Source> { it.isDub }
++                    .thenByDescending { it.isMp4Upload }
++                    .thenByDescending { it.isUpn }
+                     .thenByDescending { it.server.equals("YourUpload", ignoreCase = true) }
+                     .thenByDescending { it.server.equals("Voe", ignoreCase = true) }
+             )
+diff --git a/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Models.kt b/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Models.kt
+index c912485..1abafdf 100644
+--- a/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Models.kt
++++ b/app/android/src/main/kotlin/app/yokan/datasource/animeav1/AnimeAV1Models.kt
+@@ -15,6 +15,8 @@ data class AnimeAV1Source(
+ ) {
+     val isUpn: Boolean get() = server.equals("UPNShare", ignoreCase = true) || embedUrl.contains("uns.bio", ignoreCase = true)
+ 
++    val isMp4Upload: Boolean get() = server.equals("MP4Upload", ignoreCase = true) || embedUrl.contains("mp4upload.com", ignoreCase = true)
++
+     val displayName: String get() = when {
+         isUpn -> "AnimeAV1 (UPN - HLS Directo)"
+         server.equals("MP4Upload", ignoreCase = true) -> "AnimeAV1 (MP4Upload - 1080p)"
+diff --git a/app/android/src/main/kotlin/app/yokan/media/WatchHistoryManager.kt b/app/android/src/main/kotlin/app/yokan/media/WatchHistoryManager.kt
+index c34f668..ad6cf6f 100644
+--- a/app/android/src/main/kotlin/app/yokan/media/WatchHistoryManager.kt
++++ b/app/android/src/main/kotlin/app/yokan/media/WatchHistoryManager.kt
+@@ -126,7 +126,7 @@ class WatchHistoryManager private constructor(context: Context) {
+     ) {
+         if (positionMillis < 10_000L) return
+ 
+-        val progress = WatchProgress(
++        val watched = WatchProgress(
+             animeId = animeId,
+             animeTitle = animeTitle,
+             animeRomaji = animeRomaji,
+@@ -139,6 +139,14 @@ class WatchHistoryManager private constructor(context: Context) {
+             lastWatchedTimestamp = System.currentTimeMillis(),
+         )
+ 
++        // Episodio terminado (>= 92 %): "Continuar viendo" avanza al siguiente (N+1, desde 0:00)
++        // en lugar de desaparecer. Solo se oculta cuando era el último episodio.
++        val progress = if (watched.isFinished && (totalEpisodes == 0 || episode < totalEpisodes)) {
++            watched.copy(episode = episode + 1, positionMillis = 0L, durationMillis = 0L)
++        } else {
++            watched
++        }
++
+         val current = _history.value.toMutableList()
+         val existingIndex = current.indexOfFirst { it.animeId == animeId }
+         if (existingIndex >= 0) {
+diff --git a/app/android/src/main/kotlin/app/yokan/ui/MainActivity.kt b/app/android/src/main/kotlin/app/yokan/ui/MainActivity.kt
+index c3a5f33..b8e55ed 100644
+--- a/app/android/src/main/kotlin/app/yokan/ui/MainActivity.kt
++++ b/app/android/src/main/kotlin/app/yokan/ui/MainActivity.kt
+@@ -131,7 +131,7 @@ private fun YokanApp(
+     var selectedNavTab by remember { mutableStateOf(0) }
+ 
+     // Auto-Resolver Híbrido:
+-    // 1. Intento prioritario por AnimeAV1 (servidor UPN por defecto para carga inmediata sin anuncios ni seeds)
++    // 1. Intento prioritario por AnimeAV1 (servidor MP4Upload por defecto: el más rápido y estable)
+     // 2. Fallback a la red BitTorrent (Nyaa / Erai-raws) si no está disponible en la web
+     LaunchedEffect(resolvingEpisodeState) {
+         val state = resolvingEpisodeState ?: return@LaunchedEffect
+@@ -145,7 +145,7 @@ private fun YokanApp(
+             savedProgress.positionMillis
+         } else 0L
+ 
+-        // Intento 1: AnimeAV1 (UPN primero)
++        // Intento 1: AnimeAV1 (MP4Upload primero)
+         val webStreamResult = animeAV1Client.resolveBestStream(
+             romajiTitle = state.anime.title.romaji,
+             englishTitle = state.anime.title.english,
+diff --git a/app/android/src/main/kotlin/app/yokan/ui/screens/AnimeDetailsScreen.kt b/app/android/src/main/kotlin/app/yokan/ui/screens/AnimeDetailsScreen.kt
+index 93ef280..04bed15 100644
+--- a/app/android/src/main/kotlin/app/yokan/ui/screens/AnimeDetailsScreen.kt
++++ b/app/android/src/main/kotlin/app/yokan/ui/screens/AnimeDetailsScreen.kt
+@@ -115,7 +115,11 @@ fun AnimeDetailsScreen(
+         val buttonLabel = if (hasSavedProgress) {
+             val mins = (savedProgress!!.positionMillis / 1000) / 60
+             val secs = (savedProgress.positionMillis / 1000) % 60
+-            "Continuar — Ep $buttonEpisode (${mins}:${secs.toString().padStart(2, '0')})"
++            if (savedProgress.positionMillis >= 5_000L) {
++                "Continuar — Ep $buttonEpisode (${mins}:${secs.toString().padStart(2, '0')})"
++            } else {
++                "Continuar — Ep $buttonEpisode"
++            }
+         } else {
+             "Comenzar a ver (Ep 1)"
+         }
+diff --git a/app/android/src/main/kotlin/app/yokan/ui/screens/HomeScreen.kt b/app/android/src/main/kotlin/app/yokan/ui/screens/HomeScreen.kt
+index d211417..0603fdc 100644
+--- a/app/android/src/main/kotlin/app/yokan/ui/screens/HomeScreen.kt
++++ b/app/android/src/main/kotlin/app/yokan/ui/screens/HomeScreen.kt
+@@ -1,5 +1,6 @@
+ package app.yokan.ui.screens
+ 
++import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
+@@ -19,8 +20,11 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+ import androidx.compose.foundation.lazy.grid.items
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.CloudOff
+ import androidx.compose.material.icons.rounded.Close
++import androidx.compose.material.icons.rounded.Refresh
+ import androidx.compose.material.icons.rounded.Search
++import androidx.compose.material3.Button
+ import androidx.compose.material3.Card
+ import androidx.compose.material3.CardDefaults
+ import androidx.compose.material3.CircularProgressIndicator
+@@ -32,7 +36,12 @@ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.OutlinedTextField
+ import androidx.compose.material3.OutlinedTextFieldDefaults
+ import androidx.compose.material3.Scaffold
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
+ import androidx.compose.material3.Text
++import androidx.compose.material3.pulltorefresh.PullToRefreshBox
++import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
++import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.collectAsState
+@@ -48,6 +57,7 @@ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+@@ -58,6 +68,8 @@ import app.yokan.ui.components.AnimePosterCard
+ import app.yokan.ui.components.TrendingCarousel
+ import app.yokan.ui.state.HomeCache
+ import kotlinx.coroutines.Job
++import kotlinx.coroutines.async
++import kotlinx.coroutines.isActive
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import me.him188.ani.app.ui.adaptive.AniTopAppBar
+@@ -89,6 +101,11 @@ fun HomeScreen(
+     val coroutineScope = rememberCoroutineScope()
+     var searchJob by remember { mutableStateOf<Job?>(null) }
+ 
++    var loadError by remember { mutableStateOf(false) }
++    var isRefreshing by remember { mutableStateOf(false) }
++    var openingAnimeId by remember { mutableStateOf<Int?>(null) }
++    val snackbarHostState = remember { SnackbarHostState() }
++
+     val layoutParams = SubjectGridDefaults.coverLayoutParameters()
+ 
+     LaunchedEffect(isSearchTab) {
+@@ -104,22 +121,53 @@ fun HomeScreen(
+         onSearchModeChange?.invoke(active)
+     }
+ 
+-    LaunchedEffect(Unit) {
+-        if (!HomeCache.isLoaded) {
+-            isLoading = true
+-            val trendingRes = aniListClient.fetchTrending(1, 10)
+-            val popularRes = aniListClient.fetchPopular(1, 30)
++    /** Descarga trending y populares en paralelo. Devuelve true solo si ambas peticiones tuvieron éxito. */
++    suspend fun loadHome(): Boolean {
++        val trending = coroutineScope.async { aniListClient.fetchTrending(1, 10) }
++        val popular = coroutineScope.async { aniListClient.fetchPopular(1, 30) }
++        val trendingRes = trending.await()
++        val popularRes = popular.await()
++
++        trendingRes.onSuccess {
++            trendingList = it
++            HomeCache.trendingList = it
++        }
++        popularRes.onSuccess {
++            popularList = it
++            HomeCache.popularList = it
++        }
+ 
+-            trendingRes.onSuccess {
+-                trendingList = it
+-                HomeCache.trendingList = it
++        val ok = trendingRes.isSuccess && popularRes.isSuccess
++        // Solo se marca como cargado si todo salió bien; así se reintenta al volver a entrar.
++        HomeCache.isLoaded = ok
++        // Pantalla de error solo si no hay nada que mostrar
++        loadError = !ok && trendingList.isEmpty() && popularList.isEmpty()
++        return ok
++    }
++
++    /** Recarga el catálogo (pull-to-refresh, "Reintentar" y carga inicial). */
++    fun refresh() {
++        if (isRefreshing) return
++        isRefreshing = true
++        coroutineScope.launch {
++            var ok = false
++            try {
++                ok = loadHome()
++            } finally {
++                isRefreshing = false
++                isLoading = false
+             }
+-            popularRes.onSuccess {
+-                popularList = it
+-                HomeCache.popularList = it
++            if (!ok && !loadError) {
++                // Hay datos en pantalla pero la actualización falló (total o parcialmente)
++                snackbarHostState.showSnackbar("No se pudo actualizar. Revisa tu conexión.")
+             }
+-            HomeCache.isLoaded = true
+-            isLoading = false
++        }
++    }
++
++    LaunchedEffect(Unit) {
++        if (!HomeCache.isLoaded) {
++            isLoading = true
++            refresh()
+         }
+     }
+ 
+@@ -143,6 +191,12 @@ fun HomeScreen(
+                                             searchResults = it
+                                             HomeCache.searchResults = it
+                                             isSearchLoading = false
++                                        }.onFailure {
++                                            // isActive: el cliente puede devolver Failure si esta búsqueda fue cancelada por otra
++                                            if (isActive) {
++                                                isSearchLoading = false
++                                                snackbarHostState.showSnackbar("No se pudo buscar. Revisa tu conexión.")
++                                            }
+                                         }
+                                     }
+                                 } else {
+@@ -192,7 +246,8 @@ fun HomeScreen(
+                     }
+                 }
+             )
+-        }
++        },
++        snackbarHost = { SnackbarHost(snackbarHostState) },
+     ) { padding ->
+         if (isLoading) {
+             Box(
+@@ -247,138 +302,234 @@ fun HomeScreen(
+                     }
+                 }
+             }
+-        } else {
+-            LazyVerticalGrid(
+-                columns = layoutParams.gridCells,
+-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
+-                horizontalArrangement = layoutParams.horizontalArrangement,
+-                verticalArrangement = layoutParams.verticalArrangement,
++        } else if (loadError) {
++            HomeErrorState(
++                onRetry = {
++                    loadError = false
++                    isLoading = true
++                    refresh()
++                },
+                 modifier = Modifier
+                     .fillMaxSize()
+-                    .appChromeHazeSource(MaterialTheme.colorScheme.background)
+                     .padding(padding),
+-            ) {
+-                item(span = { GridItemSpan(maxLineSpan) }) {
+-                    TrendingCarousel(
+-                        trendingList = trendingList,
+-                        onAnimeClick = onAnimeClick,
+-                        modifier = Modifier.padding(bottom = 12.dp),
++            )
++        } else {
++            val pullState = rememberPullToRefreshState()
++            PullToRefreshBox(
++                isRefreshing = isRefreshing,
++                onRefresh = { refresh() },
++                state = pullState,
++                modifier = Modifier.fillMaxSize(),
++                indicator = {
++                    PullToRefreshDefaults.Indicator(
++                        state = pullState,
++                        isRefreshing = isRefreshing,
++                        modifier = Modifier
++                            .align(Alignment.TopCenter)
++                            .padding(top = padding.calculateTopPadding()),
+                     )
+-                }
+-
+-                // "Continuar viendo" section
+-                val activeHistory = watchHistory.filter { !it.isFinished }
+-                if (activeHistory.isNotEmpty()) {
++                },
++            ) {
++                LazyVerticalGrid(
++                    columns = layoutParams.gridCells,
++                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
++                    horizontalArrangement = layoutParams.horizontalArrangement,
++                    verticalArrangement = layoutParams.verticalArrangement,
++                    modifier = Modifier
++                        .fillMaxSize()
++                        .appChromeHazeSource(MaterialTheme.colorScheme.background)
++                        .padding(padding),
++                ) {
+                     item(span = { GridItemSpan(maxLineSpan) }) {
+-                        Text(
+-                            text = "Continuar viendo",
+-                            style = MaterialTheme.typography.titleMedium,
+-                            fontWeight = FontWeight.Bold,
+-                            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
++                        TrendingCarousel(
++                            trendingList = trendingList,
++                            onAnimeClick = onAnimeClick,
++                            modifier = Modifier.padding(bottom = 12.dp),
+                         )
+                     }
+-                    item(span = { GridItemSpan(maxLineSpan) }) {
+-                        LazyRow(
+-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+-                            contentPadding = PaddingValues(bottom = 12.dp),
+-                        ) {
+-                            items(activeHistory, key = { it.animeId }) { progress ->
+-                                Card(
+-                                    modifier = Modifier
+-                                        .width(130.dp)
+-                                        .clickable {
+-                                            // Find the anime in trending/popular or create a minimal reference
+-                                            val matchedAnime = (trendingList + popularList)
+-                                                .firstOrNull { it.id == progress.animeId }
+-                                            if (matchedAnime != null) {
+-                                                onAnimeClick(matchedAnime)
++
++                    // "Continuar viendo" section
++                    val activeHistory = watchHistory.filter { !it.isFinished }
++                    if (activeHistory.isNotEmpty()) {
++                        item(span = { GridItemSpan(maxLineSpan) }) {
++                            Text(
++                                text = "Continuar viendo",
++                                style = MaterialTheme.typography.titleMedium,
++                                fontWeight = FontWeight.Bold,
++                                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
++                            )
++                        }
++                        item(span = { GridItemSpan(maxLineSpan) }) {
++                            LazyRow(
++                                horizontalArrangement = Arrangement.spacedBy(12.dp),
++                                contentPadding = PaddingValues(bottom = 12.dp),
++                            ) {
++                                items(activeHistory, key = { it.animeId }) { progress ->
++                                    Card(
++                                        modifier = Modifier
++                                            .width(130.dp)
++                                            .clickable(enabled = openingAnimeId == null) {
++                                                val cached = (trendingList + popularList + searchResults)
++                                                    .firstOrNull { it.id == progress.animeId }
++                                                if (cached != null) {
++                                                    onAnimeClick(cached)
++                                                } else {
++                                                    // No está en las listas en memoria: se pide a AniList por su id
++                                                    openingAnimeId = progress.animeId
++                                                    coroutineScope.launch {
++                                                        aniListClient.getAnimeDetails(progress.animeId)
++                                                            .onSuccess { onAnimeClick(it) }
++                                                            .onFailure {
++                                                                if (isActive) {
++                                                                    snackbarHostState.showSnackbar("No se pudo abrir el anime. Revisa tu conexión.")
++                                                                }
++                                                            }
++                                                        openingAnimeId = null
++                                                    }
++                                                }
++                                            },
++                                        shape = RoundedCornerShape(12.dp),
++                                        colors = CardDefaults.cardColors(
++                                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
++                                        ),
++                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
++                                    ) {
++                                        Box {
++                                            if (!progress.coverUrl.isNullOrBlank()) {
++                                                AsyncImage(
++                                                    model = progress.coverUrl,
++                                                    contentDescription = progress.animeTitle,
++                                                    modifier = Modifier
++                                                        .fillMaxWidth()
++                                                        .height(160.dp),
++                                                    contentScale = ContentScale.Crop,
++                                                )
++                                            } else {
++                                                Box(
++                                                    modifier = Modifier
++                                                        .fillMaxWidth()
++                                                        .height(160.dp),
++                                                    contentAlignment = Alignment.Center,
++                                                ) {
++                                                    Text(
++                                                        text = progress.animeTitle.take(2),
++                                                        fontWeight = FontWeight.Bold,
++                                                        fontSize = 32.sp,
++                                                    )
++                                                }
+                                             }
+-                                        },
+-                                    shape = RoundedCornerShape(12.dp),
+-                                    colors = CardDefaults.cardColors(
+-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+-                                    ),
+-                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+-                                ) {
+-                                    Box {
+-                                        if (!progress.coverUrl.isNullOrBlank()) {
+-                                            AsyncImage(
+-                                                model = progress.coverUrl,
+-                                                contentDescription = progress.animeTitle,
++                                            // Progress bar at bottom of image
++                                            LinearProgressIndicator(
++                                                progress = { progress.progressFraction },
+                                                 modifier = Modifier
+                                                     .fillMaxWidth()
+-                                                    .height(160.dp),
+-                                                contentScale = ContentScale.Crop,
++                                                    .height(3.dp)
++                                                    .align(Alignment.BottomStart),
++                                                color = Color(0xFFE0E0E0),
++                                                trackColor = Color.Black.copy(alpha = 0.3f),
+                                             )
+-                                        } else {
+-                                            Box(
+-                                                modifier = Modifier
+-                                                    .fillMaxWidth()
+-                                                    .height(160.dp),
+-                                                contentAlignment = Alignment.Center,
+-                                            ) {
++                                            if (openingAnimeId == progress.animeId) {
++                                                Box(
++                                                    modifier = Modifier
++                                                        .matchParentSize()
++                                                        .background(Color.Black.copy(alpha = 0.5f)),
++                                                    contentAlignment = Alignment.Center,
++                                                ) {
++                                                    CircularProgressIndicator(
++                                                        modifier = Modifier.size(28.dp),
++                                                        strokeWidth = 3.dp,
++                                                    )
++                                                }
++                                            }
++                                        }
++                                        // Title + episode label
++                                        Box(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
++                                            Column {
++                                                Text(
++                                                    text = progress.animeTitle,
++                                                    style = MaterialTheme.typography.bodySmall,
++                                                    fontWeight = FontWeight.SemiBold,
++                                                    maxLines = 2,
++                                                    overflow = TextOverflow.Ellipsis,
++                                                    lineHeight = 16.sp,
++                                                )
++                                                Spacer(modifier = Modifier.height(2.dp))
+                                                 Text(
+-                                                    text = progress.animeTitle.take(2),
+-                                                    fontWeight = FontWeight.Bold,
+-                                                    fontSize = 32.sp,
++                                                    text = "Ep ${progress.episode}",
++                                                    style = MaterialTheme.typography.labelSmall,
++                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                 )
+                                             }
+                                         }
+-                                        // Progress bar at bottom of image
+-                                        LinearProgressIndicator(
+-                                            progress = { progress.progressFraction },
+-                                            modifier = Modifier
+-                                                .fillMaxWidth()
+-                                                .height(3.dp)
+-                                                .align(Alignment.BottomStart),
+-                                            color = Color(0xFFE0E0E0),
+-                                            trackColor = Color.Black.copy(alpha = 0.3f),
+-                                        )
+-                                    }
+-                                    // Title + episode label
+-                                    Box(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+-                                        Column {
+-                                            Text(
+-                                                text = progress.animeTitle,
+-                                                style = MaterialTheme.typography.bodySmall,
+-                                                fontWeight = FontWeight.SemiBold,
+-                                                maxLines = 2,
+-                                                overflow = TextOverflow.Ellipsis,
+-                                                lineHeight = 16.sp,
+-                                            )
+-                                            Spacer(modifier = Modifier.height(2.dp))
+-                                            Text(
+-                                                text = "Ep ${progress.episode}",
+-                                                style = MaterialTheme.typography.labelSmall,
+-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+-                                            )
+-                                        }
+                                     }
+                                 }
+                             }
+                         }
+                     }
+-                }
+ 
+-                item(span = { GridItemSpan(maxLineSpan) }) {
+-                    Text(
+-                        text = "Más Populares",
+-                        style = MaterialTheme.typography.titleMedium,
+-                        fontWeight = FontWeight.Bold,
+-                        modifier = Modifier.padding(vertical = 8.dp),
+-                    )
+-                }
++                    item(span = { GridItemSpan(maxLineSpan) }) {
++                        Text(
++                            text = "Más Populares",
++                            style = MaterialTheme.typography.titleMedium,
++                            fontWeight = FontWeight.Bold,
++                            modifier = Modifier.padding(vertical = 8.dp),
++                        )
++                    }
+ 
+-                items(
+-                    items = popularList,
+-                    key = { it.id }
+-                ) { anime ->
+-                    AnimePosterCard(
+-                        anime = anime,
+-                        onClick = { onAnimeClick(anime) }
+-                    )
++                    items(
++                        items = popularList,
++                        key = { it.id }
++                    ) { anime ->
++                        AnimePosterCard(
++                            anime = anime,
++                            onClick = { onAnimeClick(anime) }
++                        )
++                    }
+                 }
+             }
+         }
+     }
+ }
++
++@Composable
++private fun HomeErrorState(
++    onRetry: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    Column(
++        modifier = modifier.padding(32.dp),
++        horizontalAlignment = Alignment.CenterHorizontally,
++        verticalArrangement = Arrangement.Center,
++    ) {
++        Icon(
++            imageVector = Icons.Rounded.CloudOff,
++            contentDescription = null,
++            modifier = Modifier.size(56.dp),
++            tint = MaterialTheme.colorScheme.onSurfaceVariant,
++        )
++        Spacer(modifier = Modifier.height(16.dp))
++        Text(
++            text = "No se pudo cargar el catálogo",
++            style = MaterialTheme.typography.titleMedium,
++            fontWeight = FontWeight.Bold,
++            textAlign = TextAlign.Center,
++        )
++        Spacer(modifier = Modifier.height(8.dp))
++        Text(
++            text = "Revisa tu conexión a internet e inténtalo de nuevo.",
++            style = MaterialTheme.typography.bodyMedium,
++            color = MaterialTheme.colorScheme.onSurfaceVariant,
++            textAlign = TextAlign.Center,
++        )
++        Spacer(modifier = Modifier.height(24.dp))
++        Button(onClick = onRetry) {
++            Icon(
++                imageVector = Icons.Rounded.Refresh,
++                contentDescription = null,
++                modifier = Modifier.size(18.dp),
++            )
++            Spacer(modifier = Modifier.width(8.dp))
++            Text("Reintentar")
++        }
++    }
++}
+diff --git a/app/android/src/main/kotlin/app/yokan/ui/screens/TorrentSelectionModal.kt b/app/android/src/main/kotlin/app/yokan/ui/screens/TorrentSelectionModal.kt
+index 5fb0953..6312bbe 100644
+--- a/app/android/src/main/kotlin/app/yokan/ui/screens/TorrentSelectionModal.kt
++++ b/app/android/src/main/kotlin/app/yokan/ui/screens/TorrentSelectionModal.kt
+@@ -229,16 +229,11 @@ fun TorrentSelectionModal(
+                         ) {
+                             CircularProgressIndicator()
+                             Text(
+-                                text = "Conectando stream $resolvingServerName...",
++                                text = "Cargando...",
+                                 fontWeight = FontWeight.Bold,
+                                 style = MaterialTheme.typography.bodyMedium,
+                                 color = MaterialTheme.colorScheme.primary
+                             )
+-                            Text(
+-                                text = "Aplicando descifrado seguro y bloqueo de anuncios...",
+-                                style = MaterialTheme.typography.bodySmall,
+-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+-                            )
+                         }
+                     }
+                 }
+@@ -289,7 +284,7 @@ fun TorrentSelectionModal(
+                             items(allWebSources) { source ->
+                                 AnimekoWebStreamCard(
+                                     source = source,
+-                                    isTopRecommended = source.isUpn,
++                                    isTopRecommended = source.isMp4Upload,
+                                     onClick = {
+                                         coroutineScope.launch {
+                                             isResolvingWebStream = true
+diff --git a/app/android/src/main/kotlin/app/yokan/ui/screens/VideoPlayerScreen.kt b/app/android/src/main/kotlin/app/yokan/ui/screens/VideoPlayerScreen.kt
+index f36e6fe..1171d9a 100644
+--- a/app/android/src/main/kotlin/app/yokan/ui/screens/VideoPlayerScreen.kt
++++ b/app/android/src/main/kotlin/app/yokan/ui/screens/VideoPlayerScreen.kt
+@@ -177,6 +177,9 @@ private fun rememberPlayerTouchSeekState(
+     }
+ }
+ 
++/** Segundos de cuenta regresiva antes de pasar solo al siguiente episodio. */
++private const val AUTO_NEXT_SECONDS = 5
++
+ @Composable
+ fun VideoPlayerScreen(
+     torrent: NyaaTorrent? = null,
+@@ -197,7 +200,7 @@ fun VideoPlayerScreen(
+     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
+ 
+     var errorMessage by remember { mutableStateOf<String?>(null) }
+-    var loadingStatus by remember { mutableStateOf<String?>("Conectando con la red...") }
++    var loadingStatus by remember { mutableStateOf<String?>("Cargando...") }
+     var currentMediaData by remember { mutableStateOf<TorrentMediaData?>(null) }
+     var cacheProgressInfo by remember { mutableStateOf<MediaCacheProgressInfo?>(null) }
+     var cachePercentText by remember { mutableStateOf<String?>(null) }
+@@ -207,6 +210,8 @@ fun VideoPlayerScreen(
+     var hasSeekedToInitial by remember { mutableStateOf(initialPositionMillis <= 0L) }
+     var resumeToastShown by remember { mutableStateOf(false) }
+     var lastSavedPositionMs by remember { mutableLongStateOf(0L) }
++    // Segundos restantes para el siguiente episodio; null = sin cuenta regresiva activa
++    var nextEpisodeCountdown by remember { mutableStateOf<Int?>(null) }
+ 
+     val coroutineExceptionHandler = remember {
+         CoroutineExceptionHandler { _, throwable ->
+@@ -281,6 +286,30 @@ fun VideoPlayerScreen(
+         return if (exoDur > 0L) exoDur else (player.mediaProperties.value?.durationMillis ?: 0L)
+     }
+ 
++    val currentOnNextEpisode by rememberUpdatedState(onNextEpisode)
++
++    /** Al llegar al final: deja el episodio N+1 en "Continuar viendo" y arranca la cuenta regresiva. */
++    fun handleEpisodeEnded() {
++        val dur = effectiveDurationMillis()
++        if (animeForHistory != null && episodeNumber != null && dur > 0L) {
++            // posición == duración => el manager lo registra como episodio siguiente desde 0:00
++            watchHistoryManager.saveProgress(
++                animeId = animeForHistory.id,
++                animeTitle = animeForHistory.title.displayTitle,
++                animeRomaji = animeForHistory.title.romaji,
++                animeEnglish = animeForHistory.title.english,
++                coverUrl = animeForHistory.coverImage?.bestQualityUrl,
++                episode = episodeNumber,
++                totalEpisodes = animeForHistory.effectiveEpisodesCount,
++                positionMillis = dur,
++                durationMillis = dur,
++            )
++        }
++        if (currentOnNextEpisode != null && errorMessage == null) {
++            nextEpisodeCountdown = AUTO_NEXT_SECONDS
++        }
++    }
++
+     var isFullscreen by remember { mutableStateOf(true) }
+     var isLocked by remember { mutableStateOf(false) }
+     var showPlayerStats by remember { mutableStateOf(false) }
+@@ -424,6 +453,12 @@ fun VideoPlayerScreen(
+             override fun onPlaybackStateChanged(playbackState: Int) {
+                 logger.info("ExoPlayer playbackState changed: $playbackState (READY=3, BUFFERING=2, ENDED=4, IDLE=1)")
+                 exoIsBuffering = playbackState == Player.STATE_BUFFERING
++                if (playbackState == Player.STATE_ENDED) {
++                    handleEpisodeEnded()
++                } else {
++                    // Si el usuario retrocede o reinicia, se cancela la cuenta regresiva
++                    nextEpisodeCountdown = null
++                }
+                 if (playbackState == Player.STATE_READY) {
+                     loadingStatus = null
+                     errorMessage = null
+@@ -523,10 +558,24 @@ fun VideoPlayerScreen(
+         }
+     }
+ 
++    // Cuenta regresiva de "Siguiente episodio" (se cancela poniendo nextEpisodeCountdown = null)
++    LaunchedEffect(nextEpisodeCountdown != null) {
++        while (nextEpisodeCountdown != null) {
++            delay(1_000)
++            val left = (nextEpisodeCountdown ?: break) - 1
++            if (left <= 0) {
++                nextEpisodeCountdown = null
++                currentOnNextEpisode?.invoke()
++            } else {
++                nextEpisodeCountdown = left
++            }
++        }
++    }
++
+     LaunchedEffect(activeWebStream?.streamUrl) {
+         val stream = activeWebStream ?: return@LaunchedEffect
+         webSourceReady = false
+-        loadingStatus = "Cargando stream web de AnimeAV1 (${stream.serverName})..."
++        loadingStatus = "Cargando..."
+         errorMessage = null
+         try {
+             logger.info("Iniciando reproducción de stream web: ${stream.streamUrl}")
+@@ -1111,6 +1160,56 @@ fun VideoPlayerScreen(
+                 }
+             )
+ 
++            // Cuenta regresiva para el siguiente episodio
++            nextEpisodeCountdown?.let { secondsLeft ->
++                Box(
++                    modifier = Modifier
++                        .fillMaxSize()
++                        .padding(end = 24.dp, bottom = 96.dp),
++                    contentAlignment = Alignment.BottomEnd,
++                ) {
++                    androidx.compose.material3.Surface(
++                        shape = RoundedCornerShape(16.dp),
++                        color = Color.Black.copy(alpha = 0.85f),
++                        contentColor = Color.White,
++                    ) {
++                        Column(
++                            modifier = Modifier.padding(16.dp),
++                            verticalArrangement = Arrangement.spacedBy(8.dp),
++                        ) {
++                            Text(
++                                text = "Siguiente episodio en $secondsLeft s",
++                                fontWeight = FontWeight.Bold,
++                                style = MaterialTheme.typography.titleSmall,
++                            )
++                            if (episodeNumber != null) {
++                                Text(
++                                    text = "Episodio ${episodeNumber + 1}",
++                                    style = MaterialTheme.typography.bodySmall,
++                                    color = Color.White.copy(alpha = 0.7f),
++                                )
++                            }
++                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                                OutlinedButton(
++                                    onClick = { nextEpisodeCountdown = null },
++                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
++                                ) {
++                                    Text("Cancelar", color = Color.White)
++                                }
++                                Button(
++                                    onClick = {
++                                        nextEpisodeCountdown = null
++                                        currentOnNextEpisode?.invoke()
++                                    },
++                                ) {
++                                    Text("Ver ahora")
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++
+             // Diálogo de error amigable
+             if (errorMessage != null) {
+                 Box(

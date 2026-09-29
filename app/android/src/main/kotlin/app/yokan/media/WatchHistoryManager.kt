@@ -126,7 +126,7 @@ class WatchHistoryManager private constructor(context: Context) {
     ) {
         if (positionMillis < 10_000L) return
 
-        val progress = WatchProgress(
+        val watched = WatchProgress(
             animeId = animeId,
             animeTitle = animeTitle,
             animeRomaji = animeRomaji,
@@ -138,6 +138,14 @@ class WatchHistoryManager private constructor(context: Context) {
             durationMillis = durationMillis,
             lastWatchedTimestamp = System.currentTimeMillis(),
         )
+
+        // Episodio terminado (>= 92 %): "Continuar viendo" avanza al siguiente (N+1, desde 0:00)
+        // en lugar de desaparecer. Solo se oculta cuando era el último episodio.
+        val progress = if (watched.isFinished && (totalEpisodes == 0 || episode < totalEpisodes)) {
+            watched.copy(episode = episode + 1, positionMillis = 0L, durationMillis = 0L)
+        } else {
+            watched
+        }
 
         val current = _history.value.toMutableList()
         val existingIndex = current.indexOfFirst { it.animeId == animeId }

@@ -125,7 +125,7 @@ class AnimeAV1Client(
 
     /**
      * Extrae los servidores de reproducción (embeds) para un episodio determinado.
-     * Prioriza estrictamente el servidor UPN (UPNShare / uns.bio) tal como se solicitó.
+     * Prioriza el servidor MP4Upload (el más rápido y estable), seguido de UPNShare.
      */
     suspend fun getEpisodeSources(slug: String, episodeNumber: Int): List<AnimeAV1Source> = withContext(Dispatchers.IO) {
         val cacheKey = "$slug:$episodeNumber"
@@ -168,15 +168,16 @@ class AnimeAV1Client(
                 }
             }
 
-            // Ordenamiento prioritario:
-            // 1. UPNShare / uns.bio primero (el más estable por defecto)
-            // 2. MP4Upload
+            // Ordenamiento prioritario (SUB antes que DUB, y dentro de cada grupo):
+            // 1. MP4Upload primero (el más rápido y estable)
+            // 2. UPNShare / uns.bio
             // 3. YourUpload
             // 4. Voe
             // 5. Otros
             val sortedSources = sources.sortedWith(
-                compareByDescending<AnimeAV1Source> { it.isUpn }
-                    .thenByDescending { it.server.equals("MP4Upload", ignoreCase = true) }
+                compareBy<AnimeAV1Source> { it.isDub }
+                    .thenByDescending { it.isMp4Upload }
+                    .thenByDescending { it.isUpn }
                     .thenByDescending { it.server.equals("YourUpload", ignoreCase = true) }
                     .thenByDescending { it.server.equals("Voe", ignoreCase = true) }
             )

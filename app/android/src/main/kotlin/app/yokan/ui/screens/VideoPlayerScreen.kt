@@ -177,6 +177,9 @@ private fun rememberPlayerTouchSeekState(
     }
 }
 
+/** Segundos de cuenta regresiva antes de pasar solo al siguiente episodio. */
+private const val AUTO_NEXT_SECONDS = 5
+
 @Composable
 fun VideoPlayerScreen(
     torrent: NyaaTorrent? = null,
@@ -197,7 +200,7 @@ fun VideoPlayerScreen(
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var loadingStatus by remember { mutableStateOf<String?>("Conectando con la red...") }
+    var loadingStatus by remember { mutableStateOf<String?>("Cargando...") }
     var currentMediaData by remember { mutableStateOf<TorrentMediaData?>(null) }
     var cacheProgressInfo by remember { mutableStateOf<MediaCacheProgressInfo?>(null) }
     var cachePercentText by remember { mutableStateOf<String?>(null) }
@@ -207,6 +210,8 @@ fun VideoPlayerScreen(
     var hasSeekedToInitial by remember { mutableStateOf(initialPositionMillis <= 0L) }
     var resumeToastShown by remember { mutableStateOf(false) }
     var lastSavedPositionMs by remember { mutableLongStateOf(0L) }
+    // Segundos restantes para el siguiente episodio; null = sin cuenta regresiva activa
+    var nextEpisodeCountdown by remember { mutableStateOf<Int?>(null) }
 
     val coroutineExceptionHandler = remember {
         CoroutineExceptionHandler { _, throwable ->
@@ -279,6 +284,30 @@ fun VideoPlayerScreen(
             if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L
         } ?: 0L
         return if (exoDur > 0L) exoDur else (player.mediaProperties.value?.durationMillis ?: 0L)
+    }
+
+    val currentOnNextEpisode by rememberUpdatedState(onNextEpisode)
+
+    /** Al llegar al final: deja el episodio N+1 en "Continuar viendo" y arranca la cuenta regresiva. */
+    fun handleEpisodeEnded() {
+        val dur = effectiveDurationMillis()
+        if (animeForHistory != null && episodeNumber != null && dur > 0L) {
+            // posición == duración => el manager lo registra como episodio siguiente desde 0:00
+            watchHistoryManager.saveProgress(
+                animeId = animeForHistory.id,
+                animeTitle = animeForHistory.title.displayTitle,
+                animeRomaji = animeForHistory.title.romaji,
+                animeEnglish = animeForHistory.title.english,
+                coverUrl = animeForHistory.coverImage?.bestQualityUrl,
+                episode = episodeNumber,
+                totalEpisodes = animeForHistory.effectiveEpisodesCount,
+                positionMillis = dur,
+                durationMillis = dur,
+            )
+        }
+        if (currentOnNextEpisode != null && errorMessage == null) {
+            nextEpisodeCountdown = AUTO_NEXT_SECONDS
+        }
     }
 
     var isFullscreen by remember { mutableStateOf(true) }
@@ -424,6 +453,12 @@ fun VideoPlayerScreen(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 logger.info("ExoPlayer playbackState changed: $playbackState (READY=3, BUFFERING=2, ENDED=4, IDLE=1)")
                 exoIsBuffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_ENDED) {
+                    handleEpisodeEnded()
+                } else {
+                    // Si el usuario retrocede o reinicia, se cancela la cuenta regresiva
+                    nextEpisodeCountdown = null
+                }
                 if (playbackState == Player.STATE_READY) {
                     loadingStatus = null
                     errorMessage = null
@@ -523,10 +558,24 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Cuenta regresiva de "Siguiente episodio" (se cancela poniendo nextEpisodeCountdown = null)
+    LaunchedEffect(nextEpisodeCountdown != null) {
+        while (nextEpisodeCountdown != null) {
+            delay(1_000)
+            val left = (nextEpisodeCountdown ?: break) - 1
+            if (left <= 0) {
+                nextEpisodeCountdown = null
+                currentOnNextEpisode?.invoke()
+            } else {
+                nextEpisodeCountdown = left
+            }
+        }
+    }
+
     LaunchedEffect(activeWebStream?.streamUrl) {
         val stream = activeWebStream ?: return@LaunchedEffect
         webSourceReady = false
-        loadingStatus = "Cargando stream web de AnimeAV1 (${stream.serverName})..."
+        loadingStatus = "Cargando..."
         errorMessage = null
         try {
             logger.info("Iniciando reproducción de stream web: ${stream.streamUrl}")
@@ -1110,6 +1159,56 @@ fun VideoPlayerScreen(
                     )
                 }
             )
+
+            // Cuenta regresiva para el siguiente episodio
+            nextEpisodeCountdown?.let { secondsLeft ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(end = 24.dp, bottom = 96.dp),
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    androidx.compose.material3.Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color.Black.copy(alpha = 0.85f),
+                        contentColor = Color.White,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "Siguiente episodio en $secondsLeft s",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            if (episodeNumber != null) {
+                                Text(
+                                    text = "Episodio ${episodeNumber + 1}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { nextEpisodeCountdown = null },
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
+                                ) {
+                                    Text("Cancelar", color = Color.White)
+                                }
+                                Button(
+                                    onClick = {
+                                        nextEpisodeCountdown = null
+                                        currentOnNextEpisode?.invoke()
+                                    },
+                                ) {
+                                    Text("Ver ahora")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Diálogo de error amigable
             if (errorMessage != null) {

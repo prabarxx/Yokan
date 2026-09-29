@@ -1,5 +1,6 @@
 package app.yokan.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,8 +20,11 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -32,7 +36,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -48,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +68,8 @@ import app.yokan.ui.components.AnimePosterCard
 import app.yokan.ui.components.TrendingCarousel
 import app.yokan.ui.state.HomeCache
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import me.him188.ani.app.ui.adaptive.AniTopAppBar
@@ -89,6 +101,11 @@ fun HomeScreen(
     val coroutineScope = rememberCoroutineScope()
     var searchJob by remember { mutableStateOf<Job?>(null) }
 
+    var loadError by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    var openingAnimeId by remember { mutableStateOf<Int?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
     val layoutParams = SubjectGridDefaults.coverLayoutParameters()
 
     LaunchedEffect(isSearchTab) {
@@ -104,22 +121,53 @@ fun HomeScreen(
         onSearchModeChange?.invoke(active)
     }
 
+    /** Descarga trending y populares en paralelo. Devuelve true solo si ambas peticiones tuvieron éxito. */
+    suspend fun loadHome(): Boolean {
+        val trending = coroutineScope.async { aniListClient.fetchTrending(1, 10) }
+        val popular = coroutineScope.async { aniListClient.fetchPopular(1, 30) }
+        val trendingRes = trending.await()
+        val popularRes = popular.await()
+
+        trendingRes.onSuccess {
+            trendingList = it
+            HomeCache.trendingList = it
+        }
+        popularRes.onSuccess {
+            popularList = it
+            HomeCache.popularList = it
+        }
+
+        val ok = trendingRes.isSuccess && popularRes.isSuccess
+        // Solo se marca como cargado si todo salió bien; así se reintenta al volver a entrar.
+        HomeCache.isLoaded = ok
+        // Pantalla de error solo si no hay nada que mostrar
+        loadError = !ok && trendingList.isEmpty() && popularList.isEmpty()
+        return ok
+    }
+
+    /** Recarga el catálogo (pull-to-refresh, "Reintentar" y carga inicial). */
+    fun refresh() {
+        if (isRefreshing) return
+        isRefreshing = true
+        coroutineScope.launch {
+            var ok = false
+            try {
+                ok = loadHome()
+            } finally {
+                isRefreshing = false
+                isLoading = false
+            }
+            if (!ok && !loadError) {
+                // Hay datos en pantalla pero la actualización falló (total o parcialmente)
+                snackbarHostState.showSnackbar("No se pudo actualizar. Revisa tu conexión.")
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         if (!HomeCache.isLoaded) {
             isLoading = true
-            val trendingRes = aniListClient.fetchTrending(1, 10)
-            val popularRes = aniListClient.fetchPopular(1, 30)
-
-            trendingRes.onSuccess {
-                trendingList = it
-                HomeCache.trendingList = it
-            }
-            popularRes.onSuccess {
-                popularList = it
-                HomeCache.popularList = it
-            }
-            HomeCache.isLoaded = true
-            isLoading = false
+            refresh()
         }
     }
 
@@ -143,6 +191,12 @@ fun HomeScreen(
                                             searchResults = it
                                             HomeCache.searchResults = it
                                             isSearchLoading = false
+                                        }.onFailure {
+                                            // isActive: el cliente puede devolver Failure si esta búsqueda fue cancelada por otra
+                                            if (isActive) {
+                                                isSearchLoading = false
+                                                snackbarHostState.showSnackbar("No se pudo buscar. Revisa tu conexión.")
+                                            }
                                         }
                                     }
                                 } else {
@@ -192,7 +246,8 @@ fun HomeScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (isLoading) {
             Box(
@@ -247,138 +302,234 @@ fun HomeScreen(
                     }
                 }
             }
-        } else {
-            LazyVerticalGrid(
-                columns = layoutParams.gridCells,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
-                horizontalArrangement = layoutParams.horizontalArrangement,
-                verticalArrangement = layoutParams.verticalArrangement,
+        } else if (loadError) {
+            HomeErrorState(
+                onRetry = {
+                    loadError = false
+                    isLoading = true
+                    refresh()
+                },
                 modifier = Modifier
                     .fillMaxSize()
-                    .appChromeHazeSource(MaterialTheme.colorScheme.background)
                     .padding(padding),
-            ) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    TrendingCarousel(
-                        trendingList = trendingList,
-                        onAnimeClick = onAnimeClick,
-                        modifier = Modifier.padding(bottom = 12.dp),
+            )
+        } else {
+            val pullState = rememberPullToRefreshState()
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = { refresh() },
+                state = pullState,
+                modifier = Modifier.fillMaxSize(),
+                indicator = {
+                    PullToRefreshDefaults.Indicator(
+                        state = pullState,
+                        isRefreshing = isRefreshing,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = padding.calculateTopPadding()),
                     )
-                }
-
-                // "Continuar viendo" section
-                val activeHistory = watchHistory.filter { !it.isFinished }
-                if (activeHistory.isNotEmpty()) {
+                },
+            ) {
+                LazyVerticalGrid(
+                    columns = layoutParams.gridCells,
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 100.dp),
+                    horizontalArrangement = layoutParams.horizontalArrangement,
+                    verticalArrangement = layoutParams.verticalArrangement,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .appChromeHazeSource(MaterialTheme.colorScheme.background)
+                        .padding(padding),
+                ) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            text = "Continuar viendo",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                        TrendingCarousel(
+                            trendingList = trendingList,
+                            onAnimeClick = onAnimeClick,
+                            modifier = Modifier.padding(bottom = 12.dp),
                         )
                     }
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(bottom = 12.dp),
-                        ) {
-                            items(activeHistory, key = { it.animeId }) { progress ->
-                                Card(
-                                    modifier = Modifier
-                                        .width(130.dp)
-                                        .clickable {
-                                            // Find the anime in trending/popular or create a minimal reference
-                                            val matchedAnime = (trendingList + popularList)
-                                                .firstOrNull { it.id == progress.animeId }
-                                            if (matchedAnime != null) {
-                                                onAnimeClick(matchedAnime)
-                                            }
-                                        },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                                    ),
-                                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                                ) {
-                                    Box {
-                                        if (!progress.coverUrl.isNullOrBlank()) {
-                                            AsyncImage(
-                                                model = progress.coverUrl,
-                                                contentDescription = progress.animeTitle,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(160.dp),
-                                                contentScale = ContentScale.Crop,
-                                            )
-                                        } else {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(160.dp),
-                                                contentAlignment = Alignment.Center,
-                                            ) {
-                                                Text(
-                                                    text = progress.animeTitle.take(2),
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 32.sp,
+
+                    // "Continuar viendo" section
+                    val activeHistory = watchHistory.filter { !it.isFinished }
+                    if (activeHistory.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                text = "Continuar viendo",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                            )
+                        }
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = PaddingValues(bottom = 12.dp),
+                            ) {
+                                items(activeHistory, key = { it.animeId }) { progress ->
+                                    Card(
+                                        modifier = Modifier
+                                            .width(130.dp)
+                                            .clickable(enabled = openingAnimeId == null) {
+                                                val cached = (trendingList + popularList + searchResults)
+                                                    .firstOrNull { it.id == progress.animeId }
+                                                if (cached != null) {
+                                                    onAnimeClick(cached)
+                                                } else {
+                                                    // No está en las listas en memoria: se pide a AniList por su id
+                                                    openingAnimeId = progress.animeId
+                                                    coroutineScope.launch {
+                                                        aniListClient.getAnimeDetails(progress.animeId)
+                                                            .onSuccess { onAnimeClick(it) }
+                                                            .onFailure {
+                                                                if (isActive) {
+                                                                    snackbarHostState.showSnackbar("No se pudo abrir el anime. Revisa tu conexión.")
+                                                                }
+                                                            }
+                                                        openingAnimeId = null
+                                                    }
+                                                }
+                                            },
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                        ),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                    ) {
+                                        Box {
+                                            if (!progress.coverUrl.isNullOrBlank()) {
+                                                AsyncImage(
+                                                    model = progress.coverUrl,
+                                                    contentDescription = progress.animeTitle,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(160.dp),
+                                                    contentScale = ContentScale.Crop,
                                                 )
+                                            } else {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(160.dp),
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    Text(
+                                                        text = progress.animeTitle.take(2),
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 32.sp,
+                                                    )
+                                                }
+                                            }
+                                            // Progress bar at bottom of image
+                                            LinearProgressIndicator(
+                                                progress = { progress.progressFraction },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(3.dp)
+                                                    .align(Alignment.BottomStart),
+                                                color = Color(0xFFE0E0E0),
+                                                trackColor = Color.Black.copy(alpha = 0.3f),
+                                            )
+                                            if (openingAnimeId == progress.animeId) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .matchParentSize()
+                                                        .background(Color.Black.copy(alpha = 0.5f)),
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(28.dp),
+                                                        strokeWidth = 3.dp,
+                                                    )
+                                                }
                                             }
                                         }
-                                        // Progress bar at bottom of image
-                                        LinearProgressIndicator(
-                                            progress = { progress.progressFraction },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(3.dp)
-                                                .align(Alignment.BottomStart),
-                                            color = Color(0xFFE0E0E0),
-                                            trackColor = Color.Black.copy(alpha = 0.3f),
-                                        )
-                                    }
-                                    // Title + episode label
-                                    Box(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                                        Column {
-                                            Text(
-                                                text = progress.animeTitle,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.SemiBold,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                                lineHeight = 16.sp,
-                                            )
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
-                                                text = "Ep ${progress.episode}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
+                                        // Title + episode label
+                                        Box(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                                            Column {
+                                                Text(
+                                                    text = progress.animeTitle,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    lineHeight = 16.sp,
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(
+                                                    text = "Ep ${progress.episode}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text = "Más Populares",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
-                }
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            text = "Más Populares",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                    }
 
-                items(
-                    items = popularList,
-                    key = { it.id }
-                ) { anime ->
-                    AnimePosterCard(
-                        anime = anime,
-                        onClick = { onAnimeClick(anime) }
-                    )
+                    items(
+                        items = popularList,
+                        key = { it.id }
+                    ) { anime ->
+                        AnimePosterCard(
+                            anime = anime,
+                            onClick = { onAnimeClick(anime) }
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HomeErrorState(
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.CloudOff,
+            contentDescription = null,
+            modifier = Modifier.size(56.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "No se pudo cargar el catálogo",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Revisa tu conexión a internet e inténtalo de nuevo.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onRetry) {
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Reintentar")
         }
     }
 }

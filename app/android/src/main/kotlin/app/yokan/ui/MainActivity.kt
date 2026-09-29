@@ -131,7 +131,7 @@ private fun YokanApp(
     var selectedNavTab by remember { mutableStateOf(0) }
 
     // Auto-Resolver Híbrido:
-    // 1. Intento prioritario por AnimeAV1 (servidor UPN por defecto para carga inmediata sin anuncios ni seeds)
+    // 1. Intento prioritario por AnimeAV1 (servidor MP4Upload por defecto: el más rápido y estable)
     // 2. Fallback a la red BitTorrent (Nyaa / Erai-raws) si no está disponible en la web
     LaunchedEffect(resolvingEpisodeState) {
         val state = resolvingEpisodeState ?: return@LaunchedEffect
@@ -145,7 +145,7 @@ private fun YokanApp(
             savedProgress.positionMillis
         } else 0L
 
-        // Intento 1: AnimeAV1 (UPN primero)
+        // Intento 1: AnimeAV1 (MP4Upload primero)
         val webStreamResult = animeAV1Client.resolveBestStream(
             romajiTitle = state.anime.title.romaji,
             englishTitle = state.anime.title.english,
