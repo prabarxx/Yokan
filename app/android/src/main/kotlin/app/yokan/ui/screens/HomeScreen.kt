@@ -57,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,7 +107,14 @@ fun HomeScreen(
 
     var trendingList by remember { mutableStateOf(HomeCache.trendingList) }
     var popularList by remember { mutableStateOf(HomeCache.popularList) }
+    var popularPage by remember { mutableStateOf(HomeCache.popularPage) }
+    var hasMorePopular by remember { mutableStateOf(HomeCache.hasMorePopular) }
+    var isLoadingMorePopular by remember { mutableStateOf(false) }
+
     var searchResults by remember { mutableStateOf(HomeCache.searchResults) }
+    var searchPage by remember { mutableStateOf(HomeCache.searchPage) }
+    var hasMoreSearch by remember { mutableStateOf(HomeCache.hasMoreSearch) }
+    var isLoadingMoreSearch by remember { mutableStateOf(false) }
 
     var isSearching by remember { mutableStateOf(isSearchTab || HomeCache.isSearching) }
     var searchQuery by remember { mutableStateOf(HomeCache.searchQuery) }
@@ -134,7 +142,102 @@ fun HomeScreen(
         }
     }
 
+    // Recuerda el scroll de la grilla de búsqueda al abrir un detalle y volver
+    val searchGridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = HomeCache.searchGridScrollIndex,
+        initialFirstVisibleItemScrollOffset = HomeCache.searchGridScrollOffset,
+    )
+    DisposableEffect(Unit) {
+        onDispose {
+            HomeCache.searchGridScrollIndex = searchGridState.firstVisibleItemIndex
+            HomeCache.searchGridScrollOffset = searchGridState.firstVisibleItemScrollOffset
+        }
+    }
+
     val layoutParams = SubjectGridDefaults.coverLayoutParameters()
+
+    /** Carga la siguiente página del catálogo de populares al hacer scroll infinito */
+    fun loadNextPopularPage() {
+        if (isLoadingMorePopular || !hasMorePopular || isRefreshing || isLoading) return
+        isLoadingMorePopular = true
+        coroutineScope.launch {
+            val nextPage = popularPage + 1
+            val res = aniListClient.fetchPopular(nextPage, 30)
+            res.onSuccess { newItems ->
+                if (newItems.isNotEmpty()) {
+                    val existingIds = popularList.map { it.id }.toSet()
+                    val filtered = newItems.filter { it.id !in existingIds }
+                    popularList = popularList + filtered
+                    popularPage = nextPage
+                    hasMorePopular = newItems.size >= 30
+                    HomeCache.popularList = popularList
+                    HomeCache.popularPage = popularPage
+                    HomeCache.hasMorePopular = hasMorePopular
+                } else {
+                    hasMorePopular = false
+                    HomeCache.hasMorePopular = false
+                }
+            }
+            isLoadingMorePopular = false
+        }
+    }
+
+    /** Carga la siguiente página de resultados de búsqueda al hacer scroll infinito */
+    fun loadNextSearchPage() {
+        val query = searchQuery.trim()
+        if (isLoadingMoreSearch || !hasMoreSearch || isSearchLoading || query.isBlank()) return
+        isLoadingMoreSearch = true
+        coroutineScope.launch {
+            val nextPage = searchPage + 1
+            val res = aniListClient.searchAnime(query, nextPage, 30)
+            res.onSuccess { newItems ->
+                if (newItems.isNotEmpty()) {
+                    val existingIds = searchResults.map { it.id }.toSet()
+                    val filtered = newItems.filter { it.id !in existingIds }
+                    searchResults = searchResults + filtered
+                    searchPage = nextPage
+                    hasMoreSearch = newItems.size >= 30
+                    HomeCache.searchResults = searchResults
+                    HomeCache.searchPage = searchPage
+                    HomeCache.hasMoreSearch = hasMoreSearch
+                } else {
+                    hasMoreSearch = false
+                    HomeCache.hasMoreSearch = false
+                }
+            }
+            isLoadingMoreSearch = false
+        }
+    }
+
+    // Detección de scroll para paginación de populares (4-6 elementos antes del final)
+    val shouldLoadMorePopular = remember {
+        derivedStateOf {
+            val totalItems = gridState.layoutInfo.totalItemsCount
+            val lastVisibleIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            totalItems > 0 && lastVisibleIndex >= totalItems - 6
+        }
+    }
+
+    LaunchedEffect(shouldLoadMorePopular.value) {
+        if (shouldLoadMorePopular.value && !isLoadingMorePopular && hasMorePopular && !isLoading && !isRefreshing) {
+            loadNextPopularPage()
+        }
+    }
+
+    // Detección de scroll para paginación de búsqueda (4-6 elementos antes del final)
+    val shouldLoadMoreSearch = remember {
+        derivedStateOf {
+            val totalItems = searchGridState.layoutInfo.totalItemsCount
+            val lastVisibleIndex = searchGridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            totalItems > 0 && lastVisibleIndex >= totalItems - 6
+        }
+    }
+
+    LaunchedEffect(shouldLoadMoreSearch.value) {
+        if (shouldLoadMoreSearch.value && !isLoadingMoreSearch && hasMoreSearch && !isSearchLoading && searchQuery.isNotBlank()) {
+            loadNextSearchPage()
+        }
+    }
 
     LaunchedEffect(isSearchTab) {
         if (isSearchTab != isSearching) {
@@ -162,7 +265,11 @@ fun HomeScreen(
         }
         popularRes.onSuccess {
             popularList = it
+            popularPage = 1
+            hasMorePopular = it.size >= 30
             HomeCache.popularList = it
+            HomeCache.popularPage = 1
+            HomeCache.hasMorePopular = hasMorePopular
         }
 
         val ok = trendingRes.isSuccess && popularRes.isSuccess
@@ -233,7 +340,11 @@ fun HomeScreen(
                                         val res = aniListClient.searchAnime(query, 1, 30)
                                         res.onSuccess {
                                             searchResults = it
+                                            searchPage = 1
+                                            hasMoreSearch = it.size >= 30
                                             HomeCache.searchResults = it
+                                            HomeCache.searchPage = 1
+                                            HomeCache.hasMoreSearch = hasMoreSearch
                                             isSearchLoading = false
                                         }.onFailure {
                                             // isActive: el cliente puede devolver Failure si esta búsqueda fue cancelada por otra
@@ -245,7 +356,11 @@ fun HomeScreen(
                                     }
                                 } else {
                                     searchResults = emptyList()
+                                    searchPage = 1
+                                    hasMoreSearch = true
                                     HomeCache.searchResults = emptyList()
+                                    HomeCache.searchPage = 1
+                                    HomeCache.hasMoreSearch = true
                                     isSearchLoading = false
                                 }
                             },
@@ -278,8 +393,12 @@ fun HomeScreen(
                             if (!newMode) {
                                 searchQuery = ""
                                 searchResults = emptyList()
+                                searchPage = 1
+                                hasMoreSearch = true
                                 HomeCache.searchQuery = ""
                                 HomeCache.searchResults = emptyList()
+                                HomeCache.searchPage = 1
+                                HomeCache.hasMoreSearch = true
                             }
                         }
                     ) {
@@ -330,6 +449,7 @@ fun HomeScreen(
             } else {
                 LazyVerticalGrid(
                     columns = layoutParams.gridCells,
+                    state = searchGridState,
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
                     horizontalArrangement = layoutParams.horizontalArrangement,
                     verticalArrangement = layoutParams.verticalArrangement,
@@ -343,6 +463,23 @@ fun HomeScreen(
                             anime = anime,
                             onClick = { onAnimeClick(anime) }
                         )
+                    }
+
+                    if (isLoadingMoreSearch) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(28.dp),
+                                    strokeWidth = 2.5.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -535,6 +672,23 @@ fun HomeScreen(
                             anime = anime,
                             onClick = { onAnimeClick(anime) }
                         )
+                    }
+
+                    if (isLoadingMorePopular) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(28.dp),
+                                    strokeWidth = 2.5.dp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
                     }
                 }
             }
