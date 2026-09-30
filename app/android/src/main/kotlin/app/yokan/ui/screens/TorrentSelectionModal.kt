@@ -58,6 +58,7 @@ import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -110,9 +111,17 @@ fun TorrentSelectionModal(
             }.getOrDefault(emptyList())
         }
 
-        // Si un origen no responde en 12 s se sigue con lo que haya, en vez de dejar el spinner colgado
-        allTorrents = withTimeoutOrNull(12_000L) { torrentDeferred.await() } ?: emptyList()
-        allWebSources = withTimeoutOrNull(12_000L) { webDeferred.await() } ?: emptyList()
+        // Espera en paralelo con timeout unificado (máximo 9s en total en vez de 24s)
+        withTimeoutOrNull(9_000L) {
+            coroutineScope {
+                launch {
+                    allTorrents = runCatching { torrentDeferred.await() }.getOrDefault(emptyList())
+                }
+                launch {
+                    allWebSources = runCatching { webDeferred.await() }.getOrDefault(emptyList())
+                }
+            }
+        }
         torrentDeferred.cancel()
         webDeferred.cancel()
 

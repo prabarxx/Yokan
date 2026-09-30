@@ -76,9 +76,9 @@ jobs:
             echo "store_pass=yokan123" >> "$GITHUB_OUTPUT"
             echo "key_alias=yokan" >> "$GITHUB_OUTPUT"
             echo "key_pass=yokan123" >> "$GITHUB_OUTPUT"
+            echo "::warning::Usando keystore efímero: cada build firma con clave distinta y Android exigirá desinstalar para actualizar. Para firma estable, añade los secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD."
           fi
           echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
-          echo "::warning::Usando keystore efímero: cada build firma con clave distinta y Android exigirá desinstalar para actualizar. Para firma estable, añade los secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD."
 
       - name: Build Android Release APK
         run: |

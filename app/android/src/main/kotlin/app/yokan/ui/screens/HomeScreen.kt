@@ -22,10 +22,12 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -98,6 +100,7 @@ import me.him188.ani.app.ui.subject.SubjectGridDefaults
 fun HomeScreen(
     aniListClient: AniListClient,
     onAnimeClick: (AniListMedia) -> Unit,
+    onEpisodeClick: ((AniListMedia, Int) -> Unit)? = null,
     isSearchTab: Boolean = false,
     onSearchModeChange: ((Boolean) -> Unit)? = null,
 ) {
@@ -560,13 +563,23 @@ fun HomeScreen(
                                                 val cached = (trendingList + popularList + searchResults)
                                                     .firstOrNull { it.id == progress.animeId }
                                                 if (cached != null) {
-                                                    onAnimeClick(cached)
+                                                    if (onEpisodeClick != null) {
+                                                        onEpisodeClick(cached, progress.episode)
+                                                    } else {
+                                                        onAnimeClick(cached)
+                                                    }
                                                 } else {
                                                     // No está en las listas en memoria: se pide a AniList por su id
                                                     openingAnimeId = progress.animeId
                                                     coroutineScope.launch {
                                                         aniListClient.getAnimeDetails(progress.animeId)
-                                                            .onSuccess { onAnimeClick(it) }
+                                                            .onSuccess { anime ->
+                                                                if (onEpisodeClick != null) {
+                                                                    onEpisodeClick(anime, progress.episode)
+                                                                } else {
+                                                                    onAnimeClick(anime)
+                                                                }
+                                                            }
                                                             .onFailure {
                                                                 if (isActive) {
                                                                     snackbarHostState.showSnackbar("No se pudo abrir el anime. Revisa tu conexión.")
@@ -605,6 +618,22 @@ fun HomeScreen(
                                                         fontSize = 32.sp,
                                                     )
                                                 }
+                                            }
+                                            // Play icon badge
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color.Black.copy(alpha = 0.55f))
+                                                    .align(Alignment.Center),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.PlayArrow,
+                                                    contentDescription = "Continuar viendo",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(22.dp),
+                                                )
                                             }
                                             // Progress bar at bottom of image
                                             LinearProgressIndicator(

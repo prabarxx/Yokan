@@ -67,7 +67,13 @@ data class AniListMedia(
         }
 
     val effectiveEpisodesCount: Int
-        get() = episodes ?: streamingEpisodes.size.takeIf { it > 0 } ?: 0
+        get() {
+            if (episodes != null && episodes > 0) return episodes
+            if (streamingEpisodes.isNotEmpty()) return streamingEpisodes.size
+            if (latestAiredEpisode > 0) return latestAiredEpisode
+            if (status.equals("RELEASING", ignoreCase = true)) return maxOf(latestAiredEpisode, 1)
+            return 1
+        }
 
     /**
      * Último episodio ya emitido. Solo se conoce si el anime está en emisión y AniList informa el próximo.

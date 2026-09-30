@@ -13,7 +13,10 @@ local.properties
 # Android build outputs
 app/android/release/
 app/android/debug/
+output_apks/
 *.apk
+*.patch
+*.zip
 
 ### IDE ###
 .idea/
