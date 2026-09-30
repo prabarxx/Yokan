@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
@@ -42,11 +45,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -91,7 +96,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import me.him188.ani.app.ui.adaptive.AniTopAppBar
+import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuiteDefaults
 import me.him188.ani.app.ui.foundation.AsyncImage
+import me.him188.ani.app.ui.foundation.layout.currentWindowAdaptiveInfo1
+import me.him188.ani.app.ui.foundation.theme.LocalAppChromeOverlayInsets
 import me.him188.ani.app.ui.foundation.theme.appChromeHazeSource
 import me.him188.ani.app.ui.subject.SubjectGridDefaults
 
@@ -309,6 +317,15 @@ fun HomeScreen(
         }
     }
 
+    val overlayBottom = LocalAppChromeOverlayInsets.current.asPaddingValues().calculateBottomPadding()
+    val isNavBar = AniNavigationSuiteDefaults.calculateLayoutType(currentWindowAdaptiveInfo1()) == NavigationSuiteType.NavigationBar
+    val navBarSystemBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val snackbarBottomPadding = if (isNavBar) {
+        if (overlayBottom > 0.dp) overlayBottom + 12.dp else 80.dp + navBarSystemBottom + 12.dp
+    } else {
+        16.dp
+    }
+
     /** Quita una tarjeta de "Continuar viendo" (pulsación larga) con opción de deshacer. */
     fun removeFromHistory(progress: WatchProgress) {
         watchHistoryManager.removeProgress(progress.animeId)
@@ -317,7 +334,7 @@ fun HomeScreen(
             val result = snackbarHostState.showSnackbar(
                 message = "Quitado de Continuar viendo",
                 actionLabel = "Deshacer",
-                duration = SnackbarDuration.Short,
+                duration = SnackbarDuration.Long,
             )
             if (result == SnackbarResult.ActionPerformed) {
                 watchHistoryManager.restoreProgress(progress)
@@ -413,7 +430,17 @@ fun HomeScreen(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.padding(bottom = snackbarBottomPadding),
+            ) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    shape = RoundedCornerShape(12.dp),
+                )
+            }
+        },
     ) { padding ->
         if (isLoading) {
             HomeSkeleton(
