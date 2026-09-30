@@ -94,7 +94,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // Tiempo máximo de cada intento automático antes de ofrecer el selector manual
-private const val WEB_RESOLVE_TIMEOUT_MS = 8_000L
+private const val WEB_RESOLVE_TIMEOUT_MS = 15_000L
 private const val TORRENT_RESOLVE_TIMEOUT_MS = 10_000L
 
 private sealed interface Screen {
@@ -357,6 +357,9 @@ private fun YokanApp(
                         aniListClient = aniListClient,
                         onAnimeClick = { anime ->
                             currentScreen = Screen.Details(anime)
+                        },
+                        onEpisodeClick = { anime, episode ->
+                            resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
                         },
                         isSearchTab = selectedNavTab == 1 || HomeCache.isSearching,
                         onSearchModeChange = { active ->

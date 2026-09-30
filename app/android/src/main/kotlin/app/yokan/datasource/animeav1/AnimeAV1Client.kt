@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.utils.logging.logger
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -337,10 +338,16 @@ class AnimeAV1Client(
             // que resuelva bien. Ya no se hace verifyStreamUrlAlive en el camino crítico:
             // ExoPlayer falla rápido si el enlace está caído y el usuario puede cambiar de fuente.
             coroutineScope {
-                val deferred = subSources.take(3).map { src -> async { resolveStream(src) } }
+                val deferred = subSources.take(3).map { src ->
+                    async {
+                        withTimeoutOrNull(5_000L) {
+                            resolveStream(src).getOrNull()
+                        }
+                    }
+                }
                 try {
                     for (d in deferred) {
-                        val stream = d.await().getOrNull()
+                        val stream = d.await()
                         if (stream != null) {
                             logger.info("Fuente resuelta: ${stream.serverName} -> ${stream.streamUrl}")
                             return@coroutineScope stream
