@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -65,6 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
+import app.yokan.anilist.model.AniListRelation
+import app.yokan.datasource.animeav1.AnimeAV1Client
 import app.yokan.media.WatchHistoryManager
 import me.him188.ani.app.ui.foundation.AsyncImage
 
@@ -74,6 +78,8 @@ fun AnimeDetailsScreen(
     animeId: Int,
     initialAnime: AniListMedia?,
     aniListClient: AniListClient,
+    animeAV1Client: AnimeAV1Client,
+    onAnimeClick: (AniListMedia) -> Unit,
     onEpisodeClick: (AniListMedia, Int) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -85,13 +91,56 @@ fun AnimeDetailsScreen(
     var animeDetails by remember { mutableStateOf<AniListMedia?>(initialAnime) }
     var isLoading by remember { mutableStateOf(animeDetails == null) }
     var isSynopsisExpanded by remember { mutableStateOf(false) }
+    var specialVersions by remember { mutableStateOf<List<AniListRelation>>(emptyList()) }
 
     LaunchedEffect(animeId) {
-        val result = aniListClient.getAnimeDetails(animeId)
-        result.onSuccess {
-            animeDetails = it
-            isLoading = false
+        if (animeId > 0) {
+            val result = aniListClient.getAnimeDetails(animeId)
+            result.onSuccess { details ->
+                animeDetails = details
+                isLoading = false
+
+                // Buscar de forma asíncrona versiones especiales en AnimeAV1 (ej: Director's Cut / Shin Henshuu-ban)
+                val specials = animeAV1Client.findSpecialVersions(
+                    romajiTitle = details.title.romaji,
+                    englishTitle = details.title.english,
+                    existingRelationIds = details.relations.map { it.id }.toSet(),
+                )
+                specialVersions = specials
+            }.onFailure {
+                isLoading = false
+            }
+        } else {
+            val current = initialAnime
+            if (current != null) {
+                animeDetails = current
+                isLoading = false
+                val cleanFranchise = current.title.romaji
+                    .replace(Regex("(?i):?\\s*(shin-?henshuu-?ban|director'?s?\\s*cut|recut|remake|sin\\s*censura|uncensored)"), "")
+                    .trim()
+                if (cleanFranchise.isNotBlank()) {
+                    val searchResult = aniListClient.searchAnime(cleanFranchise, 1, 5)
+                    searchResult.onSuccess { items ->
+                        val mapped = items.map { item ->
+                            AniListRelation(
+                                id = item.id,
+                                relationType = "ALTERNATIVE",
+                                title = item.title,
+                                coverImage = item.coverImage,
+                                format = "TV",
+                                episodes = item.episodes,
+                            )
+                        }
+                        specialVersions = mapped
+                    }
+                }
+            }
         }
+    }
+
+    val allRelations = remember(animeDetails?.relations, specialVersions) {
+        val base = animeDetails?.relations.orEmpty()
+        (base + specialVersions).distinctBy { it.id }
     }
 
     val anime = animeDetails
@@ -512,6 +561,38 @@ fun AnimeDetailsScreen(
                 )
             }
 
+            // ── TEMPORADAS Y RELACIONADOS ──
+            if (allRelations.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp)
+                ) {
+                    Text(
+                        text = "Temporadas y Relacionados",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, bottom = 10.dp),
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(allRelations, key = { "${it.id}_${it.relationType}" }) { rel ->
+                            RelationPosterCard(
+                                relation = rel,
+                                onClick = { onAnimeClick(rel.toAniListMedia()) },
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                )
+            }
+
             // ── GÉNEROS (chips estilo Animeko) ──
             if (anime.genres.isNotEmpty()) {
                 Column(
@@ -551,6 +632,131 @@ fun AnimeDetailsScreen(
             }
 
             Spacer(modifier = Modifier.height(40.dp))
+        }
+    }
+}
+
+@Composable
+private fun RelationPosterCard(
+    relation: AniListRelation,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier
+            .width(115.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        ),
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
+            ) {
+                val coverUrl = relation.coverImage?.bestQualityUrl
+                if (!coverUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = coverUrl,
+                        contentDescription = relation.title.displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Rounded.Tv,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                }
+
+                // Insignia / Badge con el tipo de relación (Secuela, Precuela, Director's Cut...)
+                val badgeColor = when (relation.relationType.uppercase()) {
+                    "SEQUEL" -> MaterialTheme.colorScheme.primary
+                    "PREQUEL" -> MaterialTheme.colorScheme.secondary
+                    "DIRECTOR_CUT", "SHIN_HENSHUU_BAN" -> Color(0xFFD32F2F)
+                    "ALTERNATIVE" -> Color(0xFF7B1FA2)
+                    "SIDE_STORY" -> Color(0xFF00796B)
+                    "SPIN_OFF" -> Color(0xFFE65100)
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(5.dp)
+                        .background(
+                            color = badgeColor,
+                            shape = RoundedCornerShape(5.dp),
+                        )
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = relation.displayBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.sp,
+                    )
+                }
+
+                // Total de episodios
+                if (relation.episodes != null && relation.episodes > 0) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(4.dp)
+                            .background(
+                                color = Color.Black.copy(alpha = 0.75f),
+                                shape = RoundedCornerShape(4.dp),
+                            )
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "${relation.episodes} eps",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            fontSize = 9.sp,
+                        )
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 7.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = relation.title.displayTitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 14.sp,
+                    fontSize = 11.sp,
+                )
+                if (relation.seasonYear != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${relation.seasonYear}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
         }
     }
 }

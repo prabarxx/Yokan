@@ -100,7 +100,7 @@ private const val TORRENT_RESOLVE_TIMEOUT_MS = 10_000L
 private sealed interface Screen {
     data object Home : Screen
     data object Cache : Screen
-    data class Details(val anime: AniListMedia) : Screen
+    data class Details(val anime: AniListMedia, val previousScreen: Screen? = null) : Screen
     data class Player(
         val torrent: NyaaTorrent? = null,
         val webStream: WebStreamSource? = null,
@@ -247,7 +247,7 @@ private fun YokanApp(
                     selectedNavTab = 0
                     currentScreen = Screen.Home
                 }
-                is Screen.Details -> currentScreen = Screen.Home
+                is Screen.Details -> currentScreen = screen.previousScreen ?: Screen.Home
                 is Screen.Player -> currentScreen = screen.previousScreen
             }
         }
@@ -356,7 +356,7 @@ private fun YokanApp(
                     HomeScreen(
                         aniListClient = aniListClient,
                         onAnimeClick = { anime ->
-                            currentScreen = Screen.Details(anime)
+                            currentScreen = Screen.Details(anime = anime, previousScreen = Screen.Home)
                         },
                         onEpisodeClick = { anime, episode ->
                             resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
@@ -393,11 +393,15 @@ private fun YokanApp(
                         animeId = screen.anime.id,
                         initialAnime = screen.anime,
                         aniListClient = aniListClient,
+                        animeAV1Client = animeAV1Client,
+                        onAnimeClick = { relatedAnime ->
+                            currentScreen = Screen.Details(anime = relatedAnime, previousScreen = screen)
+                        },
                         onEpisodeClick = { anime, episode ->
                             resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
                         },
                         onBack = {
-                            currentScreen = Screen.Home
+                            currentScreen = screen.previousScreen ?: Screen.Home
                         },
                     )
                 }

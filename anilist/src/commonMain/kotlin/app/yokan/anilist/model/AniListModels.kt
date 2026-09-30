@@ -39,6 +39,38 @@ data class AniListStreamingEpisode(
 }
 
 @Serializable
+data class AniListRelation(
+    val id: Int,
+    val relationType: String, // SEQUEL, PREQUEL, SIDE_STORY, SPIN_OFF, ALTERNATIVE, DIRECTOR_CUT, etc.
+    val title: AniListTitle = AniListTitle(),
+    val coverImage: AniListCoverImage? = null,
+    val format: String? = null,
+    val episodes: Int? = null,
+    val seasonYear: Int? = null,
+    val animeav1Slug: String? = null,
+) {
+    fun toAniListMedia(): AniListMedia {
+        return AniListMedia(
+            id = id,
+            title = title,
+            coverImage = coverImage,
+            episodes = episodes,
+        )
+    }
+
+    val displayBadge: String
+        get() = when (relationType.uppercase()) {
+            "SEQUEL" -> "Secuela"
+            "PREQUEL" -> "Precuela"
+            "DIRECTOR_CUT", "SHIN_HENSHUU_BAN" -> "Director's Cut"
+            "ALTERNATIVE" -> "Versión alternativa"
+            "SIDE_STORY" -> if (format?.uppercase() == "MOVIE") "Película" else "Historia secundaria"
+            "SPIN_OFF" -> "Spin-off"
+            else -> relationType.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }
+        }
+}
+
+@Serializable
 data class AniListMedia(
     val id: Int,
     val title: AniListTitle = AniListTitle(),
@@ -54,6 +86,7 @@ data class AniListMedia(
     val previousEpisodesCount: Int? = null,
     val nextAiringEpisode: Int? = null,
     val nextAiringAt: Long? = null,
+    val relations: List<AniListRelation> = emptyList(),
 ) {
     val displayScore: String
         get() = averageScore?.let { "$it%" } ?: "N/A"

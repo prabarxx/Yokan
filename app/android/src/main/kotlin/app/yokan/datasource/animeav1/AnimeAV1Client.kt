@@ -1,5 +1,9 @@
 package app.yokan.datasource.animeav1
 
+import app.yokan.anilist.model.AniListCoverImage
+import app.yokan.anilist.model.AniListMedia
+import app.yokan.anilist.model.AniListRelation
+import app.yokan.anilist.model.AniListTitle
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -10,6 +14,16 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.him188.ani.utils.logging.logger
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -87,6 +101,121 @@ class AnimeAV1Client(
             logger.warn("Error buscando en AnimeAV1 para '$query': ${error.message}")
             emptyList()
         }
+    }
+
+    /**
+     * Obtiene los metadatos completos de una serie directamente desde AnimeAV1
+     * (útil para animes o versiones especiales que no existen en AniList).
+     */
+    suspend fun getAnimeAV1Media(slug: String): AniListMedia? = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = "$BASE_URL/media/$slug/__data.json"
+            val response = httpClient.get(url) {
+                header("User-Agent", DEFAULT_USER_AGENT)
+                header("Referer", "$BASE_URL/media/$slug")
+            }
+            if (!response.status.isSuccess()) return@runCatching null
+
+            val jsonText = response.bodyAsText()
+            val root = Json.parseToJsonElement(jsonText).jsonObject
+            val nodes = root["nodes"]?.jsonArray ?: return@runCatching null
+
+            for (node in nodes) {
+                if (node !is JsonObject) continue
+                val dataList = node["data"] as? JsonArray ?: continue
+                if (dataList.size <= 1) continue
+                val mediaObj = dataList[1] as? JsonObject ?: continue
+                if ("episodesCount" !in mediaObj) continue
+
+                fun resolveElement(element: JsonElement?): JsonElement? {
+                    if (element == null) return null
+                    val prim = element as? JsonPrimitive ?: return element
+                    val idx = prim.intOrNull
+                    if (idx != null && idx in 0 until dataList.size) {
+                        return dataList[idx]
+                    }
+                    return prim
+                }
+
+                val animeId = resolveElement(mediaObj["id"])?.jsonPrimitive?.intOrNull ?: 0
+                val title = resolveElement(mediaObj["title"])?.jsonPrimitive?.contentOrNull ?: slug.replace("-", " ")
+                val synopsis = resolveElement(mediaObj["synopsis"])?.jsonPrimitive?.contentOrNull
+                val episodesCount = resolveElement(mediaObj["episodesCount"])?.jsonPrimitive?.intOrNull ?: 1
+                val coverUrl = "https://cdn.animeav1.com/covers/$animeId.jpg"
+                val backdropUrl = "https://cdn.animeav1.com/backdrops/$animeId.jpg"
+
+                // Guardar en caché para que las peticiones de episodios no requieran resolver el slug de nuevo
+                val cacheKey = "$title|$title"
+                slugCache[cacheKey] = slug
+                slugCache[title.lowercase().trim()] = slug
+                slugCache[slug] = slug
+
+                return@runCatching AniListMedia(
+                    id = -animeId,
+                    title = AniListTitle(romaji = title, english = title),
+                    coverImage = AniListCoverImage(large = coverUrl, medium = coverUrl),
+                    bannerImage = backdropUrl,
+                    description = synopsis,
+                    episodes = episodesCount,
+                    status = "FINISHED",
+                )
+            }
+            null
+        }.getOrNull()
+    }
+
+    /**
+     * Busca versiones especiales o alternativas alojadas en AnimeAV1 que no formen parte
+     * de las relaciones estándar de AniList (ej: Director's Cut / Shin Henshuu-ban).
+     */
+    suspend fun findSpecialVersions(
+        romajiTitle: String,
+        englishTitle: String?,
+        existingRelationIds: Set<Int> = emptySet(),
+    ): List<AniListRelation> = withContext(Dispatchers.IO) {
+        runCatching {
+            // Buscamos con las palabras principales de la franquicia
+            val cleanTitle = romajiTitle.replace(Regex("[^a-zA-Z0-9\\s]"), " ").trim()
+            val tokens = cleanTitle.split(Regex("\\s+")).filter { it.length > 1 }.take(2).joinToString(" ")
+            val query = tokens.ifBlank { romajiTitle.take(15) }
+
+            val candidates = searchCatalog(query)
+            val specialRelations = mutableListOf<AniListRelation>()
+
+            val baseSlug = titleToSlug(romajiTitle)
+            val rootSlug = baseSlug.split("-").take(2).joinToString("-")
+
+            for (candidate in candidates) {
+                val slug = candidate.slug
+                val isFranchise = slug.startsWith(rootSlug) ||
+                    candidate.title.contains(tokens.split(" ").firstOrNull().orEmpty(), ignoreCase = true)
+                if (!isFranchise) continue
+
+                val isSpecial = slug.contains("shin-henshuu-ban", ignoreCase = true) ||
+                    slug.contains("director", ignoreCase = true) ||
+                    slug.contains("recut", ignoreCase = true) ||
+                    slug.contains("uncensored", ignoreCase = true) ||
+                    slug.contains("sin-censura", ignoreCase = true)
+
+                if (isSpecial) {
+                    val media = getAnimeAV1Media(slug)
+                    if (media != null && media.id !in existingRelationIds) {
+                        specialRelations.add(
+                            AniListRelation(
+                                id = media.id,
+                                relationType = "DIRECTOR_CUT",
+                                title = media.title,
+                                coverImage = media.coverImage,
+                                format = "TV",
+                                episodes = media.episodes,
+                                animeav1Slug = slug,
+                            )
+                        )
+                    }
+                }
+            }
+            specialRelations
+        }.getOrDefault(emptyList())
     }
 
     /**

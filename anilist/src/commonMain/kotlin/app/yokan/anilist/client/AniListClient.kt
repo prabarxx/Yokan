@@ -2,6 +2,7 @@ package app.yokan.anilist.client
 
 import app.yokan.anilist.model.AniListCoverImage
 import app.yokan.anilist.model.AniListMedia
+import app.yokan.anilist.model.AniListRelation
 import app.yokan.anilist.model.AniListStreamingEpisode
 import app.yokan.anilist.model.AniListTitle
 import io.ktor.client.HttpClient
@@ -193,10 +194,17 @@ class AniListClient(
                         relationType
                         node {
                           id
+                          type
+                          format
                           episodes
+                          seasonYear
                           title {
                             romaji
                             english
+                          }
+                          coverImage {
+                            large
+                            medium
                           }
                           relations {
                             edges {
@@ -331,6 +339,61 @@ class AniListClient(
             currentRelNode = nextNode
         }
 
+        val parsedRelations = mutableListOf<AniListRelation>()
+        val directEdges = obj["relations"]?.jsonObject?.get("edges")?.jsonArray
+        if (directEdges != null) {
+            for (edgeElem in directEdges) {
+                val edgeObj = edgeElem.jsonObject
+                val relType = edgeObj["relationType"]?.jsonPrimitive?.contentOrNull ?: continue
+                val nodeObj = edgeObj["node"]?.jsonObject ?: continue
+                val nodeType = nodeObj["type"]?.jsonPrimitive?.contentOrNull
+                // Ignorar adaptaciones que no sean anime (Manga, Novela, etc.)
+                if (nodeType != null && nodeType != "ANIME") continue
+
+                val relId = nodeObj["id"]?.jsonPrimitive?.intOrNull ?: continue
+                val titleObj = nodeObj["title"]?.jsonObject
+                val relTitle = AniListTitle(
+                    romaji = titleObj?.get("romaji")?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    english = titleObj?.get("english")?.jsonPrimitive?.contentOrNull,
+                    native = titleObj?.get("native")?.jsonPrimitive?.contentOrNull,
+                )
+                val coverObj = nodeObj["coverImage"]?.jsonObject
+                val relCover = if (coverObj != null) {
+                    AniListCoverImage(
+                        large = coverObj["large"]?.jsonPrimitive?.contentOrNull,
+                        medium = coverObj["medium"]?.jsonPrimitive?.contentOrNull,
+                    )
+                } else null
+
+                val format = nodeObj["format"]?.jsonPrimitive?.contentOrNull
+                val epCount = nodeObj["episodes"]?.jsonPrimitive?.intOrNull
+                val seasonYear = nodeObj["seasonYear"]?.jsonPrimitive?.intOrNull
+
+                parsedRelations.add(
+                    AniListRelation(
+                        id = relId,
+                        relationType = relType,
+                        title = relTitle,
+                        coverImage = relCover,
+                        format = format,
+                        episodes = epCount,
+                        seasonYear = seasonYear,
+                    )
+                )
+            }
+        }
+        val priorityMap = mapOf(
+            "SEQUEL" to 1,
+            "PREQUEL" to 2,
+            "ALTERNATIVE" to 3,
+            "SIDE_STORY" to 4,
+            "SPIN_OFF" to 5,
+        )
+        val sortedRelations = parsedRelations.sortedWith(
+            compareBy<AniListRelation> { priorityMap[it.relationType.uppercase()] ?: 99 }
+                .thenBy { it.seasonYear ?: 9999 }
+        )
+
         val streamingEpisodes = obj["streamingEpisodes"]?.jsonArray?.mapNotNull { epElem ->
             val epObj = epElem.jsonObject
             AniListStreamingEpisode(
@@ -356,6 +419,7 @@ class AniListClient(
             previousEpisodesCount = previousEpisodes,
             nextAiringEpisode = nextAiringEpisode,
             nextAiringAt = nextAiringAt,
+            relations = sortedRelations,
         )
     }
 }
