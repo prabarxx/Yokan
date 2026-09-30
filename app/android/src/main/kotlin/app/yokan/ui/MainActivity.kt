@@ -358,9 +358,6 @@ private fun YokanApp(
                         onAnimeClick = { anime ->
                             currentScreen = Screen.Details(anime)
                         },
-                        onEpisodeClick = { anime, episode ->
-                            resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
-                        },
                         isSearchTab = selectedNavTab == 1 || HomeCache.isSearching,
                         onSearchModeChange = { active ->
                             selectedNavTab = if (active) 1 else 0
