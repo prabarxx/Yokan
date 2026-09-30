@@ -249,7 +249,7 @@ fun VideoPlayerScreen(
         val pos = exoPlayer?.currentPosition ?: 0L
         if (pos > 5_000L) resumeAfterFallbackMs = pos
         errorMessage = null
-        loadingStatus = "${failed.serverName} falló ($reason). Probando otro servidor..."
+        loadingStatus = "Cargando..."
         coroutineScope.launch {
             val next = try {
                 resolver(failed, triedWebServers.toSet())

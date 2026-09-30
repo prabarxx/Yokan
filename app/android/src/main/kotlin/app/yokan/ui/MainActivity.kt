@@ -425,11 +425,6 @@ private fun YokanApp(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        text = "Probando: $resolvingStage",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
                         text = "Episodio ${state.episode} • ${state.anime.title.displayTitle}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
