@@ -572,7 +572,7 @@ fun AnimeDetailsScreen(
                         text = "Temporadas y Relacionados",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, bottom = 10.dp),
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
                     )
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -712,7 +712,8 @@ private fun RelationPosterCard(
                 }
 
                 // Total de episodios
-                if (relation.episodes != null && relation.episodes > 0) {
+                val relEpisodes = relation.episodes
+                if (relEpisodes != null && relEpisodes > 0) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -724,7 +725,7 @@ private fun RelationPosterCard(
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "${relation.episodes} eps",
+                            text = "$relEpisodes eps",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White,
                             fontSize = 9.sp,
