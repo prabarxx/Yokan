@@ -28,6 +28,34 @@
 
 ---
 
+## Vista Previa de la Interfaz
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src=".github/assets/screenshots/home.jpg" alt="Catálogo Principal y Tendencias" width="100%" />
+      <br />
+      <sub><b>Catálogo Principal y Tendencias en Emisión</b></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src=".github/assets/screenshots/details.jpg" alt="Ficha del Anime y Selector SUB / LAT" width="100%" />
+      <br />
+      <sub><b>Ficha Técnica, Franquicias y Selector <code>SUB | LAT</code></b></sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <img src=".github/assets/screenshots/player.jpg" alt="Reproductor Nativo 1080p con Conmutación de Idioma en Vivo" width="100%" />
+      <br />
+      <sub><b>Reproductor Nativo 1080p con Conmutación <code>LAT / SUB</code> en Vivo, Salto de Opening y Selector de Fuentes</b></sub>
+    </td>
+  </tr>
+</table>
+</div>
+
+---
+
 ## Características Principales
 
 | Categoría | Funcionalidad | Implementación Técnica |
@@ -119,7 +147,7 @@ Cada versión etiquetada compila y publica automáticamente los paquetes APK fir
 | **`yokan-universal.apk`** | `arm64-v8a`, `armeabi-v7a`, `x86_64` | Dispositivos antiguos de 32 bits, Android TV Boxes o emuladores sobre PC. |
 
 > [!NOTE]
-> Al instalar el paquete APK por primera vez, el sistema operativo solicitará autorización para instalar aplicaciones de orígenes desconocidos en el navegador o gestor de archivos utilizado.
+> Al instalar el paquete APK por primera vez, el sistema operativo solicitará autorización para instalar aplicaciones de orígenes desconocidos en el navegador o gestor de archivos utilizado. También puede gestionarse la actualización automática de versiones añadiendo la URL del repositorio (`https://github.com/prabarxx/Yokan`) en **Obtainium**.
 
 ---
 
