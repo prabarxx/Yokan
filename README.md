@@ -146,8 +146,18 @@ Cada versión etiquetada compila y publica automáticamente los paquetes APK fir
 | **`yokan-arm64-v8a.apk`** | `ARM64 (64-bit)` | **Recomendado** para la mayoría de teléfonos y tablets Android actuales. Menor tamaño y mayor rendimiento. |
 | **`yokan-universal.apk`** | `arm64-v8a`, `armeabi-v7a`, `x86_64` | Dispositivos antiguos de 32 bits, Android TV Boxes o emuladores sobre PC. |
 
+### Actualizaciones automáticas con Obtainium
+
+Puedes añadir **Yokan** directamente en [**Obtainium**](https://github.com/ImranR98/Obtainium) con un solo toque para recibir actualizaciones automáticas cada vez que se publique una nueva versión en GitHub:
+
+<div align="center">
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22app.yokan%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fprabarxx%2FYokan%22%2C%22author%22%3A%22prabarxx%22%2C%22name%22%3A%22Yokan%22%7D">
+    <img src=".github/assets/badge_obtainium.png" alt="Get it on Obtainium" height="54" />
+  </a>
+</div>
+
 > [!NOTE]
-> Al instalar el paquete APK por primera vez, el sistema operativo solicitará autorización para instalar aplicaciones de orígenes desconocidos en el navegador o gestor de archivos utilizado. También puede gestionarse la actualización automática de versiones añadiendo la URL del repositorio (`https://github.com/prabarxx/Yokan`) en **Obtainium**.
+> Al instalar el paquete APK por primera vez, el sistema operativo solicitará autorización para instalar aplicaciones de orígenes desconocidos en el navegador o gestor de archivos utilizado.
 
 ---
 
