@@ -87,11 +87,23 @@ fun AnimeDetailsScreen(
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
     val watchHistory by watchHistoryManager.allHistory.collectAsState()
     val watchedEpisodesMap by watchHistoryManager.watchedEpisodes.collectAsState()
+    val preferDub by watchHistoryManager.preferDub.collectAsState()
 
     var animeDetails by remember { mutableStateOf<AniListMedia?>(initialAnime) }
     var isLoading by remember { mutableStateOf(animeDetails == null) }
     var isSynopsisExpanded by remember { mutableStateOf(false) }
     var specialVersions by remember { mutableStateOf<List<AniListRelation>>(emptyList()) }
+    var hasDubAvailable by remember(animeId) { mutableStateOf<Boolean?>(null) }
+
+    LaunchedEffect(animeDetails?.id, animeDetails?.title?.romaji) {
+        val current = animeDetails ?: return@LaunchedEffect
+        val (_, hasDub) = animeAV1Client.getAvailableLanguages(
+            romajiTitle = current.title.romaji,
+            englishTitle = current.title.english,
+            episodeNumber = 1,
+        )
+        hasDubAvailable = hasDub
+    }
 
     LaunchedEffect(animeId) {
         if (animeId > 0) {
@@ -115,6 +127,12 @@ fun AnimeDetailsScreen(
             if (current != null) {
                 animeDetails = current
                 isLoading = false
+                if (current.description.isNullOrBlank()) {
+                    val slug = animeAV1Client.resolveSlug(current.title.romaji, current.title.english)
+                    animeAV1Client.getAnimeAV1Media(slug)?.let { enriched ->
+                        animeDetails = enriched
+                    }
+                }
                 val cleanFranchise = current.title.romaji
                     .replace(Regex("(?i):?\\s*(shin-?henshuu-?ban|director'?s?\\s*cut|recut|remake|sin\\s*censura|uncensored)"), "")
                     .trim()
@@ -403,11 +421,77 @@ fun AnimeDetailsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(
-                        text = "Episodios",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = "Episodios",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        // Selector rápido SUB / LAT (Español Latino)
+                        when (hasDubAvailable) {
+                            true -> {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        val isSubSelected = !preferDub
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = if (isSubSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { watchHistoryManager.setPreferDub(false) },
+                                        ) {
+                                            Text(
+                                                text = "SUB",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSubSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                                            )
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = if (preferDub) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { watchHistoryManager.setPreferDub(true) },
+                                        ) {
+                                            Text(
+                                                text = "LAT",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (preferDub) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            false -> {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                ) {
+                                    Text(
+                                        text = "Solo SUB",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            null -> Unit
+                        }
+                    }
                     val statusLabel = when (anime.status?.uppercase()) {
                         "FINISHED" -> "Completado"
                         "RELEASING" -> "En emisión"

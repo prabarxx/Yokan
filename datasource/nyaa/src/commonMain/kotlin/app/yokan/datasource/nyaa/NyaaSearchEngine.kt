@@ -4,13 +4,17 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.encodeURLParameter
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import me.him188.ani.utils.coroutines.IO_
+import me.him188.ani.utils.coroutines.runSuspendCatching
 import kotlin.math.ln
 
 class NyaaSearchEngine(
@@ -48,7 +52,8 @@ class NyaaSearchEngine(
         absoluteEpisodeNumber: Int? = null,
         totalEpisodes: Int? = null,
     ): Result<List<NyaaTorrent>> = withContext(Dispatchers.IO_) {
-        runCatching {
+        runSuspendCatching {
+            val semaphore = Semaphore(3)
             val queries = generateSearchQueries(
                 romajiTitle = romajiTitle,
                 englishTitle = englishTitle,
@@ -59,7 +64,11 @@ class NyaaSearchEngine(
 
             val allTorrents = coroutineScope {
                 queries.map { q ->
-                    async { executeNyaaQuery(q, episodeNumber, absoluteEpisodeNumber, totalEpisodes) }
+                    async {
+                        semaphore.withPermit {
+                            executeNyaaQuery(q, episodeNumber, absoluteEpisodeNumber, totalEpisodes)
+                        }
+                    }
                 }.awaitAll().flatten()
             }
 
@@ -73,7 +82,11 @@ class NyaaSearchEngine(
                 val fallbackQueries = generateFallbackQueries(romajiTitle, englishTitle, synonyms)
                 val fallbackTorrents = coroutineScope {
                     fallbackQueries.map { q ->
-                        async { executeNyaaQuery(q, episodeNumber, absoluteEpisodeNumber, totalEpisodes) }
+                        async {
+                            semaphore.withPermit {
+                                executeNyaaQuery(q, episodeNumber, absoluteEpisodeNumber, totalEpisodes)
+                            }
+                        }
                     }.awaitAll().flatten()
                 }
                 deduplicated = fallbackTorrents.distinctBy {
@@ -263,7 +276,7 @@ class NyaaSearchEngine(
         absoluteEpisodeNumber: Int?,
         totalEpisodes: Int?,
     ): List<NyaaTorrent> {
-        return runCatching {
+        return runSuspendCatching {
             val response = httpClient.get("https://nyaa.si/") {
                 parameter("page", "rss")
                 parameter("c", "1_0")
@@ -339,13 +352,13 @@ class NyaaSearchEngine(
                 absoluteEpisodeNumber = absoluteEpisodeNumber,
             )
 
-            // Magnet enriquecido con trackers de alto rendimiento
+            // Magnet enriquecido con trackers de alto rendimiento y parámetros codificados
             val magnetUrl = if (infoHash.isNotBlank()) {
                 buildString {
                     append("magnet:?xt=urn:btih:").append(infoHash)
-                    append("&dn=").append(cleanTitle)
+                    append("&dn=").append(cleanTitle.encodeURLParameter())
                     for (tr in fastTrackers) {
-                        append("&tr=").append(tr)
+                        append("&tr=").append(tr.encodeURLParameter())
                     }
                 }
             } else {

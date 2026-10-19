@@ -28,6 +28,7 @@ data class CachedTorrentItem(
     val torrentUrl: String = "",
     val fileSizeBytes: Long = 0L,
     val addedTimeMillis: Long = System.currentTimeMillis(),
+    val saveDirPath: String = "",
 ) {
     val formattedSize: String get() = formatBytes(fileSizeBytes)
 
@@ -109,22 +110,37 @@ class CacheStorageManager private constructor(context: Context) {
         }
     }
 
+    private fun extractInfoHashFromMagnet(magnetUrl: String): String {
+        return BTIH_REGEX.find(magnetUrl)?.groupValues?.get(1)?.lowercase().orEmpty()
+    }
+
     fun recordCachedTorrent(
         title: String,
         magnetUrl: String,
         torrentUrl: String = "",
         fileSizeBytes: Long = 0L,
+        infoHash: String = "",
+        saveDirPath: String = "",
     ) {
-        val id = title.hashCode().toString()
+        val resolvedId = infoHash.trim().lowercase()
+            .ifBlank { extractInfoHashFromMagnet(magnetUrl) }
+            .ifBlank { magnetUrl.hashCode().toString() }
+
         val current = _cachedTorrents.value.toMutableList()
-        val existingIndex = current.indexOfFirst { it.id == id || it.magnetUrl == magnetUrl }
+        val existingIndex = current.indexOfFirst {
+            it.id.equals(resolvedId, ignoreCase = true) ||
+                (saveDirPath.isNotBlank() && it.saveDirPath == saveDirPath) ||
+                it.magnetUrl == magnetUrl
+        }
+        val previous = current.getOrNull(existingIndex)
         val item = CachedTorrentItem(
-            id = id,
+            id = resolvedId,
             title = title,
             magnetUrl = magnetUrl,
-            torrentUrl = torrentUrl,
-            fileSizeBytes = if (fileSizeBytes > 0) fileSizeBytes else (current.getOrNull(existingIndex)?.fileSizeBytes ?: 0L),
+            torrentUrl = torrentUrl.ifBlank { previous?.torrentUrl.orEmpty() },
+            fileSizeBytes = if (fileSizeBytes > 0) fileSizeBytes else (previous?.fileSizeBytes ?: 0L),
             addedTimeMillis = System.currentTimeMillis(),
+            saveDirPath = saveDirPath.ifBlank { previous?.saveDirPath.orEmpty() },
         )
         if (existingIndex >= 0) {
             current[existingIndex] = item
@@ -138,7 +154,8 @@ class CacheStorageManager private constructor(context: Context) {
     fun refreshStorageInfo() {
         scope.launch {
             val cacheDir = appContext.cacheDir
-            val usedBytes = calculateDirSize(cacheDir)
+            val torrentDir = cacheDir.resolve("torrents")
+            val usedBytes = calculateDirSize(torrentDir)
             val stat = runCatching { StatFs(cacheDir.path) }.getOrNull()
             val freeBytes = stat?.let { it.availableBlocksLong * it.blockSizeLong } ?: 0L
             val totalBytes = stat?.let { it.blockCountLong * it.blockSizeLong } ?: 0L
@@ -166,25 +183,52 @@ class CacheStorageManager private constructor(context: Context) {
 
         val torrentDir = appContext.cacheDir.resolve("torrents")
         val piecesDir = torrentDir.resolve("pieces")
-        if (piecesDir.exists()) {
-            piecesDir.listFiles()?.forEach { subDir ->
-                if (subDir.name.contains(item.id) || (subDir.isDirectory && subDir.listFiles()?.any { it.name.contains(item.title, ignoreCase = true) } == true)) {
-                    subDir.deleteRecursively()
-                }
+        val torrentManager = TorrentManager.getInstance(appContext)
+
+        // Determinar directorio exacto de piezas
+        val exactPieceDir = when {
+            item.saveDirPath.isNotBlank() -> File(item.saveDirPath)
+            else -> piecesDir.resolve(item.id)
+        }
+
+        if (exactPieceDir.exists() && exactPieceDir.canonicalPath.startsWith(torrentDir.canonicalPath)) {
+            torrentManager.closeSessionByKey(exactPieceDir.name)
+            runCatching { exactPieceDir.deleteRecursively() }
+                .onFailure { logger.error("Failed to delete piece directory: ${exactPieceDir.path}", it) }
+        }
+
+        // Eliminar también el archivo .torrent cacheado por HTTP si existe
+        if (item.torrentUrl.isNotBlank()) {
+            val cachedTorrentFile = torrentDir.resolve("torrentFiles")
+                .resolve("${item.torrentUrl.hashCode()}.txt")
+            if (cachedTorrentFile.exists()) {
+                runCatching { cachedTorrentFile.delete() }
             }
         }
+
         refreshStorageInfo()
     }
 
     suspend fun clearAllCache() = withContext(Dispatchers.IO) {
         saveCachedTorrents(emptyList())
 
+        // 1. Cerrar todas las sesiones activas de torrent antes de borrar sus archivos
         runCatching {
-            appContext.cacheDir.listFiles()?.forEach { file ->
-                file.deleteRecursively()
+            TorrentManager.getInstance(appContext).closeAllSessions()
+        }.onFailure {
+            logger.error("Failed to close active torrent sessions before clearing cache", it)
+        }
+
+        // 2. Borrar únicamente el directorio propio de torrents (pieces y torrentFiles), no todo cacheDir
+        runCatching {
+            val torrentDir = appContext.cacheDir.resolve("torrents")
+            if (torrentDir.exists()) {
+                torrentDir.listFiles()?.forEach { child ->
+                    child.deleteRecursively()
+                }
             }
         }.onFailure {
-            logger.error("Failed to clear cache directory", it)
+            logger.error("Failed to clear torrent cache directory", it)
         }
         refreshStorageInfo()
     }
@@ -192,6 +236,7 @@ class CacheStorageManager private constructor(context: Context) {
     companion object {
         private val logger = logger<CacheStorageManager>()
         private const val PREF_KEY_ITEMS = "cached_torrent_items"
+        private val BTIH_REGEX = Regex("""xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})""")
 
         @Volatile
         private var instance: CacheStorageManager? = null

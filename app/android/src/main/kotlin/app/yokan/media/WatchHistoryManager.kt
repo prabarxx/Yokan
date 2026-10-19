@@ -2,11 +2,21 @@ package app.yokan.media
 
 import android.content.Context
 import android.util.Log
+import app.yokan.anilist.model.AniListCoverImage
+import app.yokan.anilist.model.AniListMedia
+import app.yokan.anilist.model.AniListTitle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.abs
 
 data class WatchProgress(
     val animeId: Int,
@@ -26,6 +36,19 @@ data class WatchProgress(
     /** Returns true if episode is considered finished (>=92% watched) */
     val isFinished: Boolean
         get() = progressFraction >= 0.92f
+
+    fun toFallbackAniListMedia(): AniListMedia = AniListMedia(
+        id = animeId,
+        title = AniListTitle(
+            romaji = animeRomaji.ifBlank { animeTitle },
+            english = animeEnglish ?: animeTitle,
+        ),
+        coverImage = coverUrl?.takeIf { it.isNotBlank() }?.let {
+            AniListCoverImage(extraLarge = it, large = it, medium = it)
+        },
+        episodes = totalEpisodes.takeIf { it > 0 },
+        status = if (animeId < 0) "FINISHED" else null,
+    )
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("animeId", animeId)
@@ -69,6 +92,10 @@ class WatchHistoryManager private constructor(context: Context) {
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("yokan_watch_history", Context.MODE_PRIVATE)
+    private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var saveHistoryJob: Job? = null
+    @Volatile
+    private var lastPersistedHistoryJson: String? = null
 
     private val _history = MutableStateFlow<List<WatchProgress>>(emptyList())
     val allHistory: StateFlow<List<WatchProgress>> = _history.asStateFlow()
@@ -77,9 +104,22 @@ class WatchHistoryManager private constructor(context: Context) {
     private val _watched = MutableStateFlow<Map<Int, Set<Int>>>(emptyMap())
     val watchedEpisodes: StateFlow<Map<Int, Set<Int>>> = _watched.asStateFlow()
 
+    /** Preferencia de idioma de reproducción: false = Subtitulado (SUB), true = Español Latino (LAT). */
+    private val _preferDub = MutableStateFlow(false)
+    val preferDub: StateFlow<Boolean> = _preferDub.asStateFlow()
+
     init {
         loadHistory()
         loadWatched()
+        _preferDub.value = prefs.getBoolean(PREF_PREFER_DUB_KEY, false)
+    }
+
+    fun setPreferDub(dub: Boolean) {
+        if (_preferDub.value == dub) return
+        _preferDub.value = dub
+        ioScope.launch {
+            prefs.edit().putBoolean(PREF_PREFER_DUB_KEY, dub).apply()
+        }
     }
 
     private fun loadHistory() {
@@ -92,25 +132,31 @@ class WatchHistoryManager private constructor(context: Context) {
             val arr = JSONArray(raw)
             val list = (0 until arr.length()).map { WatchProgress.fromJson(arr.getJSONObject(it)) }
             _history.value = list.sortedByDescending { it.lastWatchedTimestamp }
+            lastPersistedHistoryJson = raw
             Log.i(TAG, "Historial cargado desde disco: ${list.size} entradas")
         }.onFailure {
             Log.e(TAG, "No se pudo leer el historial (${raw.length} chars)", it)
         }
     }
 
-    private fun saveHistory(items: List<WatchProgress>) {
+    private fun saveHistory(items: List<WatchProgress>, debounceMillis: Long = 400L) {
         _history.value = items
-        runCatching {
-            val arr = JSONArray()
-            items.forEach { arr.put(it.toJson()) }
-            val ok = prefs.edit().putString(PREF_KEY, arr.toString()).commit()
-            if (ok) {
-                Log.i(TAG, "Historial guardado: ${items.size} entradas")
-            } else {
-                Log.e(TAG, "commit() devolvió false al guardar ${items.size} entradas")
+        saveHistoryJob?.cancel()
+        saveHistoryJob = ioScope.launch {
+            if (debounceMillis > 0L) {
+                delay(debounceMillis)
             }
-        }.onFailure {
-            Log.e(TAG, "No se pudo guardar el historial", it)
+            runCatching {
+                val arr = JSONArray()
+                items.forEach { arr.put(it.toJson()) }
+                val serialized = arr.toString()
+                if (serialized == lastPersistedHistoryJson) return@launch
+                prefs.edit().putString(PREF_KEY, serialized).apply()
+                lastPersistedHistoryJson = serialized
+                Log.i(TAG, "Historial guardado en background: ${items.size} entradas")
+            }.onFailure {
+                Log.e(TAG, "No se pudo guardar el historial", it)
+            }
         }
     }
 
@@ -160,6 +206,14 @@ class WatchHistoryManager private constructor(context: Context) {
         val current = _history.value.toMutableList()
         val existingIndex = current.indexOfFirst { it.animeId == animeId }
         if (existingIndex >= 0) {
+            val existing = current[existingIndex]
+            // Evitar reescrituras innecesarias si el episodio y la posición apenas cambiaron (< 1s)
+            if (existing.episode == progress.episode &&
+                abs(existing.positionMillis - progress.positionMillis) < 1_000L &&
+                existing.durationMillis == progress.durationMillis
+            ) {
+                return
+            }
             current[existingIndex] = progress
         } else {
             current.add(0, progress)
@@ -167,7 +221,7 @@ class WatchHistoryManager private constructor(context: Context) {
 
         // Keep only the last 30 entries
         val trimmed = current.sortedByDescending { it.lastWatchedTimestamp }.take(30)
-        saveHistory(trimmed)
+        saveHistory(trimmed, debounceMillis = 500L)
     }
 
     private fun loadWatched() {
@@ -190,19 +244,21 @@ class WatchHistoryManager private constructor(context: Context) {
         if (episode in current) return
         val updated = _watched.value + (animeId to (current + episode))
         _watched.value = updated
-        runCatching {
-            val obj = JSONObject()
-            updated.forEach { (id, eps) -> obj.put(id.toString(), JSONArray(eps.toList())) }
-            prefs.edit().putString(PREF_WATCHED_KEY, obj.toString()).commit()
-        }.onFailure {
-            Log.e(TAG, "No se pudieron guardar los episodios vistos", it)
+        ioScope.launch {
+            runCatching {
+                val obj = JSONObject()
+                updated.forEach { (id, eps) -> obj.put(id.toString(), JSONArray(eps.toList())) }
+                prefs.edit().putString(PREF_WATCHED_KEY, obj.toString()).apply()
+            }.onFailure {
+                Log.e(TAG, "No se pudieron guardar los episodios vistos", it)
+            }
         }
     }
 
     /** Devuelve una entrada al historial tal cual estaba (para "Deshacer" al quitarla). */
     fun restoreProgress(progress: WatchProgress) {
         val current = _history.value.filter { it.animeId != progress.animeId } + progress
-        saveHistory(current.sortedByDescending { it.lastWatchedTimestamp }.take(30))
+        saveHistory(current.sortedByDescending { it.lastWatchedTimestamp }.take(30), debounceMillis = 0L)
     }
 
     /** Returns the saved progress for an anime, or null if not found. */
@@ -213,13 +269,14 @@ class WatchHistoryManager private constructor(context: Context) {
     /** Remove all progress for an anime. */
     fun removeProgress(animeId: Int) {
         val updated = _history.value.filter { it.animeId != animeId }
-        saveHistory(updated)
+        saveHistory(updated, debounceMillis = 0L)
     }
 
     companion object {
         private const val TAG = "YokanHistory"
         private const val PREF_KEY = "watch_history_json"
         private const val PREF_WATCHED_KEY = "watched_episodes_json"
+        private const val PREF_PREFER_DUB_KEY = "prefer_dub"
 
         @Volatile
         private var instance: WatchHistoryManager? = null

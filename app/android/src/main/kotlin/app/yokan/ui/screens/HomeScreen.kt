@@ -595,6 +595,14 @@ fun HomeScreen(
                                                     } else {
                                                         onAnimeClick(cached)
                                                     }
+                                                } else if (progress.animeId < 0) {
+                                                    // Versión especial exclusiva de AnimeAV1 (ID negativo): reconstruir desde WatchProgress
+                                                    val specialMedia = progress.toFallbackAniListMedia()
+                                                    if (onEpisodeClick != null) {
+                                                        onEpisodeClick(specialMedia, progress.episode)
+                                                    } else {
+                                                        onAnimeClick(specialMedia)
+                                                    }
                                                 } else {
                                                     // No está en las listas en memoria: se pide a AniList por su id
                                                     openingAnimeId = progress.animeId
@@ -608,7 +616,9 @@ fun HomeScreen(
                                                                 }
                                                             }
                                                             .onFailure {
-                                                                if (isActive) {
+                                                                if (onEpisodeClick != null && progress.animeTitle.isNotBlank()) {
+                                                                    onEpisodeClick(progress.toFallbackAniListMedia(), progress.episode)
+                                                                } else if (isActive) {
                                                                     snackbarHostState.showSnackbar("No se pudo abrir el anime. Revisa tu conexión.")
                                                                 }
                                                             }

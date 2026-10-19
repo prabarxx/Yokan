@@ -36,6 +36,9 @@ class TorrentManager private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val factory = AnitorrentDownloaderFactory()
 
+    @Volatile
+    private var isDownloaderInitialized = false
+
     val downloader: AnitorrentTorrentDownloader<*, *> by lazy {
         logger.info("Loading Anitorrent native libraries...")
         factory.libraryLoader.loadLibraries()
@@ -65,7 +68,31 @@ class TorrentManager private constructor(context: Context) {
                 uploadRateLimitBytes = 0,
             ),
             parentCoroutineContext = Dispatchers.IO + SupervisorJob(),
-        )
+        ).also {
+            isDownloaderInitialized = true
+        }
+    }
+
+    /**
+     * Cierra todas las sesiones de torrent activas antes de limpiar la caché en disco.
+     */
+    suspend fun closeAllSessions() = withContext(Dispatchers.IO) {
+        if (!isDownloaderInitialized) return@withContext
+        val sessions = downloader.openSessions.value.values.toList()
+        for (session in sessions) {
+            runCatching { session.close() }
+                .onFailure { logger.warn("Error closing torrent session: ${it.message}") }
+        }
+    }
+
+    /**
+     * Cierra una sesión específica (identificada por el nombre del directorio en `pieces/<sessionKey>`) si está activa.
+     */
+    suspend fun closeSessionByKey(sessionKey: String) = withContext(Dispatchers.IO) {
+        if (!isDownloaderInitialized || sessionKey.isBlank()) return@withContext
+        val session = downloader.openSessions.value[sessionKey] ?: return@withContext
+        runCatching { session.close() }
+            .onFailure { logger.warn("Error closing torrent session $sessionKey: ${it.message}") }
     }
 
     companion object {

@@ -128,6 +128,8 @@ import me.him188.ani.app.videoplayer.ui.rememberPlayerStatsState
 import me.him188.ani.app.videoplayer.ui.rememberVideoControllerState
 import me.him188.ani.app.videoplayer.ui.top.PlayerTopBar
 import me.him188.ani.app.videoplayer.ui.top.SystemTime
+import me.him188.ani.utils.coroutines.runSuspendCatching
+import me.him188.ani.utils.io.absolutePath
 import me.him188.ani.utils.logging.error
 import me.him188.ani.utils.logging.info
 import me.him188.ani.utils.logging.logger
@@ -188,6 +190,8 @@ fun VideoPlayerScreen(
     absoluteEpisodeNumber: Int? = null,
     initialPositionMillis: Long = 0L,
     animeForHistory: AniListMedia? = null,
+    hasBothLanguages: Boolean = false,
+    onToggleAudioLanguage: (suspend (targetDub: Boolean) -> WebStreamSource?)? = null,
     onChangeSource: (() -> Unit)? = null,
     onNextEpisode: (() -> Unit)? = null,
     onResolveNextWebSource: (suspend (failed: WebStreamSource, triedServers: Set<String>) -> WebStreamSource?)? = null,
@@ -238,6 +242,7 @@ fun VideoPlayerScreen(
     var isSwitchingWebSource by remember { mutableStateOf(false) }
     var resumeAfterFallbackMs by remember { mutableLongStateOf(-1L) }
     val currentResolveNext by rememberUpdatedState(onResolveNextWebSource)
+    val currentToggleLanguage by rememberUpdatedState(onToggleAudioLanguage)
 
     /** Pasa al siguiente servidor. Devuelve true si inició el cambio (o ya hay uno en curso). */
     fun switchToNextWebSource(reason: String): Boolean {
@@ -267,6 +272,35 @@ fun VideoPlayerScreen(
             }
         }
         return true
+    }
+
+    /** Alterna al vuelo entre Subtitulado (SUB) y Español Latino (LAT) conservando la posición de reproducción. */
+    fun toggleWebAudioLanguage() {
+        val current = activeWebStream ?: return
+        val toggler = currentToggleLanguage ?: return
+        if (isSwitchingWebSource) return
+        val targetDub = !current.isDub
+        isSwitchingWebSource = true
+        triedWebServers.clear()
+        val pos = exoPlayer?.currentPosition ?: 0L
+        if (pos > 2_000L) resumeAfterFallbackMs = pos
+        errorMessage = null
+        loadingStatus = if (targetDub) "Cambiando a Español Latino..." else "Cambiando a Subtitulado..."
+        coroutineScope.launch {
+            val switched = try {
+                toggler(targetDub)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                null
+            }
+            isSwitchingWebSource = false
+            if (switched != null) {
+                activeWebStream = switched
+            } else {
+                loadingStatus = null
+            }
+        }
     }
 
     // Posición/duración efectivas: en vía web (AnimeAV1) van por exoPlayer,
@@ -468,7 +502,18 @@ fun VideoPlayerScreen(
                     if (dur > 0 && dur != androidx.media3.common.C.TIME_UNSET) {
                         exoDuration = dur
                     }
-                    webSourceReady = true
+                    if (activeWebStream != null && !webSourceReady) {
+                        webSourceReady = true
+                        // Una vez listo el primer búfer rápido, liberar el tope de resolución para que ABR suba a 1080p
+                        runCatching {
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                .buildUpon()
+                                .clearVideoSizeConstraints()
+                                .build()
+                        }
+                    } else {
+                        webSourceReady = true
+                    }
                     // Tras un fallback, retomar donde iba el video anterior
                     if (resumeAfterFallbackMs > 0L) {
                         exoPlayer.seekTo(resumeAfterFallbackMs)
@@ -577,6 +622,10 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(activeWebStream?.streamUrl) {
         val stream = activeWebStream ?: return@LaunchedEffect
+        currentMediaData?.let { prev ->
+            currentMediaData = null
+            runCatching { prev.close() }
+        }
         webSourceReady = false
         loadingStatus = "Cargando..."
         errorMessage = null
@@ -591,9 +640,9 @@ fun VideoPlayerScreen(
             }
             if (!headers.containsKey("Referer")) {
                 headers["Referer"] = "https://animeav1.uns.bio/"
-            }
-            if (!headers.containsKey("Origin")) {
-                headers["Origin"] = "https://animeav1.uns.bio"
+                if (!headers.containsKey("Origin")) {
+                    headers["Origin"] = "https://animeav1.uns.bio"
+                }
             }
             headers["Accept"] = "*/*"
 
@@ -625,11 +674,17 @@ fun VideoPlayerScreen(
 
             exoPlayer?.stop()
             exoPlayer?.clearMediaItems()
-            // Arrancar en 720p máx. para empezar rápido; ABR puede subir si se ajusta el límite
+            // Arrancar en 720p máx. en HLS para empezar rápido; al llegar a STATE_READY se libera a 1080p
             exoPlayer?.let { exo ->
                 exo.trackSelectionParameters = exo.trackSelectionParameters
                     .buildUpon()
-                    .setMaxVideoSize(1280, 720)
+                    .apply {
+                        if (isHlsStream) {
+                            setMaxVideoSize(1280, 720)
+                        } else {
+                            clearVideoSizeConstraints()
+                        }
+                    }
                     .build()
             }
             exoPlayer?.setMediaSource(mediaSource)
@@ -656,6 +711,11 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(torrent?.magnetUrl) {
         val currentTorrent = torrent ?: return@LaunchedEffect
+        activeWebStream = null
+        currentMediaData?.let { prev ->
+            currentMediaData = null
+            runCatching { prev.close() }
+        }
         loadingStatus = "Conectando con la red BitTorrent..."
         errorMessage = null
         try {
@@ -666,7 +726,7 @@ fun VideoPlayerScreen(
             loadingStatus = "Obteniendo metadatos del torrent..."
             val directTorrentUrl = currentTorrent.torrentUrl.takeIf { it.startsWith("http", ignoreCase = true) }
             val encodedInfo = if (directTorrentUrl != null) {
-                runCatching {
+                runSuspendCatching {
                     downloader.fetchTorrent(directTorrentUrl)
                 }.getOrElse { error ->
                     logger.warn("Falló descarga directa de .torrent HTTP (${error.message}), recurriendo a magnet...")
@@ -722,16 +782,23 @@ fun VideoPlayerScreen(
             currentMediaData = mediaData
 
             runCatching {
+                val exactSaveDir = downloader.getSaveDirForTorrent(encodedInfo).absolutePath
                 app.yokan.media.CacheStorageManager.getInstance(context).recordCachedTorrent(
                     title = targetFile.fileName.ifBlank { currentTorrent.title },
                     magnetUrl = currentTorrent.magnetUrl,
                     torrentUrl = currentTorrent.torrentUrl,
                     fileSizeBytes = targetFile.length,
+                    infoHash = currentTorrent.infoHash,
+                    saveDirPath = exactSaveDir,
                 )
             }
 
             loadingStatus = "Iniciando búfer de video..."
-            player.setMediaData(mediaData, playWhenReady = true)
+            player.setMediaData(
+                mediaData,
+                playWhenReady = true,
+                startPositionMillis = initialPositionMillis.coerceAtLeast(0L),
+            )
             runCatching { player.play() }
             loadingStatus = null
         } catch (e: CancellationException) {
@@ -907,6 +974,27 @@ fun VideoPlayerScreen(
                     PlayerTopBar(
                         title = {},
                         actions = {
+                            if (activeWebStream != null && hasBothLanguages && onToggleAudioLanguage != null) {
+                                val isCurrentlyDub = activeWebStream?.isDub == true
+                                OutlinedButton(
+                                    onClick = { toggleWebAudioLanguage() },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = Color.White,
+                                        containerColor = Color.Black.copy(alpha = 0.5f)
+                                    ),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.7f)),
+                                    shape = RoundedCornerShape(16.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Text(
+                                        text = if (isCurrentlyDub) "LAT ⇄ SUB" else "SUB ⇄ LAT",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                    )
+                                }
+                            }
                             if (onNextEpisode != null) {
                                 OutlinedButton(
                                     onClick = onNextEpisode,

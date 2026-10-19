@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
@@ -93,9 +94,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Tiempo máximo de cada intento automático antes de ofrecer el selector manual
+// Tiempo máximo de intento automático web antes de ofrecer el selector manual
 private const val WEB_RESOLVE_TIMEOUT_MS = 15_000L
-private const val TORRENT_RESOLVE_TIMEOUT_MS = 10_000L
 
 private sealed interface Screen {
     data object Home : Screen
@@ -130,16 +130,16 @@ private fun YokanApp(
 ) {
     val context = LocalContext.current
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
+    val preferDub by watchHistoryManager.preferDub.collectAsState()
 
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
     var resolvingEpisodeState by remember { mutableStateOf<ResolvingEpisodeState?>(null) }
     var selectedNavTab by remember { mutableStateOf(0) }
-    var resolvingStage by remember { mutableStateOf("Servidores web") }
 
-    // Auto-Resolver Híbrido:
-    // 1. Intento prioritario por AnimeAV1 (servidor MP4Upload por defecto: el más rápido y estable)
-    // 2. Fallback a la red BitTorrent (Nyaa / Erai-raws) si no está disponible en la web
+    // Auto-Resolver Web Prioritario:
+    // Intenta reproducir automáticamente desde servidores web (AnimeAV1) en el idioma preferido (SUB o LAT).
+    // Si no está disponible o tarda demasiado, abre el selector manual para que el usuario elija fuente web o torrent.
     LaunchedEffect(resolvingEpisodeState) {
         val state = resolvingEpisodeState ?: return@LaunchedEffect
         // Si se pide desde el reproductor (siguiente episodio), "atrás" debe volver a donde estaba antes
@@ -152,19 +152,28 @@ private fun YokanApp(
             savedProgress.positionMillis
         } else 0L
 
-        // Intento 1: AnimeAV1 (MP4Upload primero)
-        resolvingStage = "Servidores web"
         val webStreamResult = withTimeoutOrNull(WEB_RESOLVE_TIMEOUT_MS) {
             animeAV1Client.resolveBestStream(
                 romajiTitle = state.anime.title.romaji,
                 englishTitle = state.anime.title.english,
                 episodeNumber = state.episode,
+                preferDub = preferDub,
             )
         }
 
-        val bestWebStream = webStreamResult?.getOrNull()
-        if (bestWebStream != null) {
+        if (webStreamResult == null) {
             resolvingEpisodeState = null
+            torrentModalState = TorrentModalState(
+                state.anime,
+                state.episode,
+                notice = "La búsqueda web tardó demasiado. Elige un servidor o torrent manualmente.",
+            )
+            return@LaunchedEffect
+        }
+
+        val bestWebStream = webStreamResult.getOrNull()
+        resolvingEpisodeState = null
+        if (bestWebStream != null) {
             currentScreen = Screen.Player(
                 webStream = bestWebStream,
                 anime = state.anime,
@@ -172,62 +181,13 @@ private fun YokanApp(
                 initialPositionMillis = savedPositionMillis,
                 previousScreen = prev,
             )
-            return@LaunchedEffect
-        }
-
-        // Intento 2: Nyaa Torrents
-        val absEpisode = state.anime.calculateAbsoluteEpisode(state.episode).takeIf { it != state.episode }
-        resolvingStage = "Torrents"
-        val bestTorrentResult = withTimeoutOrNull(TORRENT_RESOLVE_TIMEOUT_MS) {
-            nyaaSearchEngine.resolveBestTorrent(
-                romajiTitle = state.anime.title.romaji,
-                englishTitle = state.anime.title.english,
-                synonyms = state.anime.synonyms,
-                episodeNumber = state.episode,
-                absoluteEpisodeNumber = absEpisode,
-                totalEpisodes = state.anime.effectiveEpisodesCount,
-            )
-        }
-
-        if (bestTorrentResult == null) {
-            // Tiempo agotado: se abre el selector manual explicando por qué
-            resolvingEpisodeState = null
+        } else {
             torrentModalState = TorrentModalState(
                 state.anime,
                 state.episode,
-                notice = "La búsqueda automática tardó demasiado. Elige una fuente.",
+                notice = "No se encontró stream web automático. Elige un servidor o torrent manualmente.",
             )
-            return@LaunchedEffect
         }
-
-        bestTorrentResult.fold(
-            onSuccess = { bestTorrent ->
-                resolvingEpisodeState = null
-                if (bestTorrent != null) {
-                    currentScreen = Screen.Player(
-                        torrent = bestTorrent,
-                        anime = state.anime,
-                        episode = state.episode,
-                        initialPositionMillis = savedPositionMillis,
-                        previousScreen = prev,
-                    )
-                } else {
-                    torrentModalState = TorrentModalState(
-                        state.anime,
-                        state.episode,
-                        notice = "No se encontró una fuente automática. Elige una manualmente.",
-                    )
-                }
-            },
-            onFailure = {
-                resolvingEpisodeState = null
-                torrentModalState = TorrentModalState(
-                    state.anime,
-                    state.episode,
-                    notice = "No se pudo buscar automáticamente. Elige una manualmente.",
-                )
-            }
-        )
     }
 
     BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null || resolvingEpisodeState != null || (currentScreen is Screen.Home && (selectedNavTab == 1 || HomeCache.isSearching))) {
@@ -255,14 +215,24 @@ private fun YokanApp(
 
     if (currentScreen is Screen.Player) {
         val playerScreen = currentScreen as Screen.Player
-        // Precarga el episodio siguiente mientras se ve el actual
-        LaunchedEffect(playerScreen.anime?.id, playerScreen.episode) {
+        var hasBothLanguages by remember(playerScreen.anime?.id, playerScreen.episode) {
+            mutableStateOf(false)
+        }
+        // Precarga el episodio siguiente mientras se ve el actual y detecta si el episodio actual tiene SUB y LAT
+        LaunchedEffect(playerScreen.anime?.id, playerScreen.episode, preferDub) {
             val anime = playerScreen.anime ?: return@LaunchedEffect
             val ep = playerScreen.episode ?: return@LaunchedEffect
+            val (hasSub, hasDub) = animeAV1Client.getAvailableLanguages(
+                romajiTitle = anime.title.romaji,
+                englishTitle = anime.title.english,
+                episodeNumber = ep,
+            )
+            hasBothLanguages = hasSub && hasDub
             animeAV1Client.prefetchEpisode(
                 romajiTitle = anime.title.romaji,
                 englishTitle = anime.title.english,
                 episodeNumber = ep + 1,
+                preferDub = preferDub,
             )
         }
         // key: recrea el reproductor limpio al cambiar de episodio o de fuente
@@ -281,6 +251,18 @@ private fun YokanApp(
             },
             initialPositionMillis = playerScreen.initialPositionMillis,
             animeForHistory = playerScreen.anime,
+            hasBothLanguages = hasBothLanguages,
+            onToggleAudioLanguage = if (playerScreen.anime != null && playerScreen.episode != null) {
+                { targetDub ->
+                    watchHistoryManager.setPreferDub(targetDub)
+                    animeAV1Client.resolveBestStream(
+                        romajiTitle = playerScreen.anime.title.romaji,
+                        englishTitle = playerScreen.anime.title.english,
+                        episodeNumber = playerScreen.episode,
+                        preferDub = targetDub,
+                    ).getOrNull()
+                }
+            } else null,
             onChangeSource = if (playerScreen.anime != null && playerScreen.episode != null) {
                 {
                     torrentModalState = TorrentModalState(playerScreen.anime, playerScreen.episode)
@@ -307,6 +289,7 @@ private fun YokanApp(
                         episodeNumber = playerScreen.episode,
                         triedServers = tried,
                         failed = failed,
+                        preferDub = failed.isDub,
                     )
                 }
             } else null,
@@ -381,12 +364,13 @@ private fun YokanApp(
                     )
                 }
                 is Screen.Details -> {
-                    LaunchedEffect(screen.anime.id) {
+                    LaunchedEffect(screen.anime.id, preferDub) {
                         // Precarga en segundo plano mientras el usuario visualiza los detalles del anime
                         animeAV1Client.prefetchEpisode(
                             romajiTitle = screen.anime.title.romaji,
                             englishTitle = screen.anime.title.english,
                             episodeNumber = 1,
+                            preferDub = preferDub,
                         )
                     }
                     AnimeDetailsScreen(
@@ -450,6 +434,12 @@ private fun YokanApp(
     }
 
     torrentModalState?.let { modal ->
+        val savedProgress = watchHistoryManager.getProgress(modal.anime.id)
+        val savedPositionMillis = if (savedProgress?.episode == modal.episode &&
+            savedProgress.progressFraction < 0.92f) {
+            savedProgress.positionMillis
+        } else 0L
+
         TorrentSelectionModal(
             anime = modal.anime,
             episodeNumber = modal.episode,
@@ -468,6 +458,7 @@ private fun YokanApp(
                     webStream = null,
                     anime = modal.anime,
                     episode = modal.episode,
+                    initialPositionMillis = savedPositionMillis,
                     previousScreen = prev,
                 )
             },
@@ -483,6 +474,7 @@ private fun YokanApp(
                     webStream = webStream,
                     anime = modal.anime,
                     episode = modal.episode,
+                    initialPositionMillis = savedPositionMillis,
                     previousScreen = prev,
                 )
             },

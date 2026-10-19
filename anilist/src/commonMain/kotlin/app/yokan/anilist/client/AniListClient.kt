@@ -27,6 +27,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import me.him188.ani.utils.coroutines.IO_
+import me.him188.ani.utils.coroutines.runSuspendCatching
 
 class AniListClient(
     private val httpClient: HttpClient = HttpClient(),
@@ -39,7 +40,7 @@ class AniListClient(
     private val endpoint = "https://graphql.anilist.co"
 
     suspend fun fetchTrending(page: Int = 1, perPage: Int = 20): Result<List<AniListMedia>> = withContext(Dispatchers.IO_) {
-        runCatching {
+        runSuspendCatching {
             val query = """
                 query (${'$'}page: Int, ${'$'}perPage: Int) {
                   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
@@ -80,7 +81,7 @@ class AniListClient(
     }
 
     suspend fun fetchPopular(page: Int = 1, perPage: Int = 20): Result<List<AniListMedia>> = withContext(Dispatchers.IO_) {
-        runCatching {
+        runSuspendCatching {
             val query = """
                 query (${'$'}page: Int, ${'$'}perPage: Int) {
                   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
@@ -121,7 +122,7 @@ class AniListClient(
     }
 
     suspend fun searchAnime(searchQuery: String, page: Int = 1, perPage: Int = 20): Result<List<AniListMedia>> = withContext(Dispatchers.IO_) {
-        runCatching {
+        runSuspendCatching {
             val query = """
                 query (${'$'}search: String, ${'$'}page: Int, ${'$'}perPage: Int) {
                   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
@@ -163,7 +164,7 @@ class AniListClient(
     }
 
     suspend fun getAnimeDetails(id: Int): Result<AniListMedia> = withContext(Dispatchers.IO_) {
-        runCatching {
+        runSuspendCatching {
             val query = """
                 query (${'$'}id: Int) {
                   Media(id: ${'$'}id, type: ANIME) {

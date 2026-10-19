@@ -24,6 +24,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.him188.ani.utils.coroutines.runSuspendCatching
 import me.him188.ani.utils.logging.logger
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -33,16 +34,20 @@ class AnimeAV1Client(
 ) {
     private val logger = logger("AnimeAV1Client")
 
-    // Caché en memoria para evitar repetir peticiones de red (0ms tras la primera resolución)
-    private val slugCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val episodeSourcesCache = java.util.concurrent.ConcurrentHashMap<String, List<AnimeAV1Source>>()
-    private val resolvedStreamCache = java.util.concurrent.ConcurrentHashMap<String, WebStreamSource>()
+    // Caché en memoria con expiración (TTL) y límite de entradas para evitar URLs caducadas y fugas de RAM
+    private val slugCache = TtlCache<String, String>(ttlMillis = SLUG_CACHE_TTL_MS, maxSize = 512)
+    private val episodeSourcesCache = TtlCache<String, List<AnimeAV1Source>>(ttlMillis = SOURCES_CACHE_TTL_MS, maxSize = 256)
+    private val resolvedStreamCache = TtlCache<String, WebStreamSource>(ttlMillis = STREAM_CACHE_TTL_MS, maxSize = 128)
 
     companion object {
         private const val BASE_URL = "https://animeav1.com"
         private const val UNS_BIO_BASE = "https://animeav1.uns.bio"
         private const val DEFAULT_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        private const val SLUG_CACHE_TTL_MS = 6 * 60 * 60_000L // 6 horas
+        private const val SOURCES_CACHE_TTL_MS = 60 * 60_000L // 60 minutos
+        private const val STREAM_CACHE_TTL_MS = 30 * 60_000L // 30 minutos (tokens HLS/MP4 caducan)
     }
 
     /**
@@ -59,7 +64,7 @@ class AnimeAV1Client(
      * Búsqueda en el catálogo de AnimeAV1 mediante el endpoint /catalogo?search={nombre}
      */
     suspend fun searchCatalog(query: String): List<AnimeAV1MediaItem> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val encodedQuery = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8.name())
             val url = "$BASE_URL/catalogo?search=$encodedQuery"
             val response = httpClient.get(url) {
@@ -69,7 +74,7 @@ class AnimeAV1Client(
 
             if (!response.status.isSuccess()) {
                 logger.warn("AnimeAV1 catalogo devolvió estado: ${response.status}")
-                return@runCatching emptyList()
+                return@runSuspendCatching emptyList()
             }
 
             val html = response.bodyAsText()
@@ -108,17 +113,17 @@ class AnimeAV1Client(
      * (útil para animes o versiones especiales que no existen en AniList).
      */
     suspend fun getAnimeAV1Media(slug: String): AniListMedia? = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val url = "$BASE_URL/media/$slug/__data.json"
             val response = httpClient.get(url) {
                 header("User-Agent", DEFAULT_USER_AGENT)
                 header("Referer", "$BASE_URL/media/$slug")
             }
-            if (!response.status.isSuccess()) return@runCatching null
+            if (!response.status.isSuccess()) return@runSuspendCatching null
 
             val jsonText = response.bodyAsText()
             val root = Json.parseToJsonElement(jsonText).jsonObject
-            val nodes = root["nodes"]?.jsonArray ?: return@runCatching null
+            val nodes = root["nodes"]?.jsonArray ?: return@runSuspendCatching null
 
             for (node in nodes) {
                 if (node !is JsonObject) continue
@@ -150,7 +155,7 @@ class AnimeAV1Client(
                 slugCache[title.lowercase().trim()] = slug
                 slugCache[slug] = slug
 
-                return@runCatching AniListMedia(
+                return@runSuspendCatching AniListMedia(
                     id = -animeId,
                     title = AniListTitle(romaji = title, english = title),
                     coverImage = AniListCoverImage(large = coverUrl, medium = coverUrl),
@@ -173,7 +178,7 @@ class AnimeAV1Client(
         englishTitle: String?,
         existingRelationIds: Set<Int> = emptySet(),
     ): List<AniListRelation> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             // Buscamos con las palabras principales de la franquicia
             val cleanTitle = romajiTitle.replace(Regex("[^a-zA-Z0-9\\s]"), " ").trim()
             val tokens = cleanTitle.split(Regex("\\s+")).filter { it.length > 1 }.take(2).joinToString(" ")
@@ -261,7 +266,7 @@ class AnimeAV1Client(
         val cacheKey = "$slug:$episodeNumber"
         episodeSourcesCache[cacheKey]?.let { return@withContext it }
 
-        runCatching {
+        runSuspendCatching {
             val url = "$BASE_URL/media/$slug/$episodeNumber"
             val response = httpClient.get(url) {
                 header("User-Agent", DEFAULT_USER_AGENT)
@@ -270,7 +275,7 @@ class AnimeAV1Client(
 
             if (!response.status.isSuccess()) {
                 logger.warn("AnimeAV1 episodio devolvió código: ${response.status}")
-                return@runCatching emptyList()
+                return@runSuspendCatching emptyList()
             }
 
             val html = response.bodyAsText()
@@ -298,19 +303,24 @@ class AnimeAV1Client(
                 }
             }
 
-            // Ordenamiento prioritario (SUB antes que DUB, y dentro de cada grupo):
+            // Filtrar solo servidores con extractor directo soportado y ordenar por prioridad (SUB antes que DUB):
             // 1. MP4Upload primero (el más rápido y estable)
             // 2. UPNShare / uns.bio
             // 3. YourUpload
             // 4. Voe
-            // 5. Otros
-            val sortedSources = sources.sortedWith(
-                compareBy<AnimeAV1Source> { it.isDub }
-                    .thenByDescending { it.isMp4Upload }
-                    .thenByDescending { it.isUpn }
-                    .thenByDescending { it.server.equals("YourUpload", ignoreCase = true) }
-                    .thenByDescending { it.server.equals("Voe", ignoreCase = true) }
-            )
+            // 5. VidHide
+            // 6. StreamTape
+            val sortedSources = sources
+                .filter { it.isSupportedExtractor }
+                .sortedWith(
+                    compareBy<AnimeAV1Source> { it.isDub }
+                        .thenByDescending { it.isMp4Upload }
+                        .thenByDescending { it.isUpn }
+                        .thenByDescending { it.server.equals("YourUpload", ignoreCase = true) }
+                        .thenByDescending { it.isVoe }
+                        .thenByDescending { it.isVidHide }
+                        .thenByDescending { it.isStreamTape }
+                )
             if (sortedSources.isNotEmpty()) {
                 episodeSourcesCache[cacheKey] = sortedSources
             }
@@ -328,112 +338,268 @@ class AnimeAV1Client(
     suspend fun resolveStream(source: AnimeAV1Source): Result<WebStreamSource> = withContext(Dispatchers.IO) {
         resolvedStreamCache[source.embedUrl]?.let { return@withContext Result.success(it) }
 
-        runCatching {
-            val webStream = if (source.isUpn) {
-                val hash = Regex("""#([a-zA-Z0-9_-]+)""").find(source.embedUrl)?.groupValues?.get(1)
-                    ?: throw IllegalArgumentException("No se encontró el hash en la URL de UPN: ${source.embedUrl}")
+        runSuspendCatching {
+            val webStream = when {
+                source.isUpn -> {
+                    val hash = Regex("""#([a-zA-Z0-9_-]+)""").find(source.embedUrl)?.groupValues?.get(1)
+                        ?: throw IllegalArgumentException("No se encontró el hash en la URL de UPN: ${source.embedUrl}")
 
-                val apiUrl = "$UNS_BIO_BASE/api/v1/video?id=$hash&w=1920&h=1080&r="
-                val response = httpClient.get(apiUrl) {
-                    header("Referer", "$UNS_BIO_BASE/")
-                    header("Origin", UNS_BIO_BASE)
-                    header("User-Agent", DEFAULT_USER_AGENT)
-                    header("Accept", "*/*")
+                    val apiUrl = "$UNS_BIO_BASE/api/v1/video?id=$hash&w=1920&h=1080&r="
+                    val response = httpClient.get(apiUrl) {
+                        header("Referer", "$UNS_BIO_BASE/")
+                        header("Origin", UNS_BIO_BASE)
+                        header("User-Agent", DEFAULT_USER_AGENT)
+                        header("Accept", "*/*")
+                    }
+
+                    if (!response.status.isSuccess()) {
+                        throw IllegalStateException("UPNShare API devolvió código: ${response.status}")
+                    }
+
+                    val hexPayload = response.bodyAsText().trim()
+                    val decryptedJson = AnimeAV1Cipher.decryptHex(hexPayload)
+
+                    // Extraer cfNative primero (el master m3u8 con proxy en Cloudflare), o cf, o source
+                    val cfNative = Regex(""""cfNative":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
+                        ?.replace("\\/", "/")
+                    val cf = Regex(""""cf":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
+                        ?.replace("\\/", "/")
+                    val sourceUrl = Regex(""""source":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
+                        ?.replace("\\/", "/")
+
+                    val targetStream = cfNative ?: cf ?: sourceUrl
+                        ?: throw IllegalStateException("No se encontró URL de stream en la respuesta descifrada de UPN")
+
+                    WebStreamSource(
+                        title = source.displayName,
+                        serverName = "UPNShare",
+                        streamUrl = targetStream,
+                        headers = mapOf(
+                            "Referer" to "$UNS_BIO_BASE/",
+                            "Origin" to UNS_BIO_BASE,
+                            "User-Agent" to DEFAULT_USER_AGENT,
+                            "Accept" to "*/*",
+                        ),
+                        quality = "1080p",
+                        isHls = true,
+                        isDub = source.isDub,
+                    )
                 }
 
-                if (!response.status.isSuccess()) {
-                    throw IllegalStateException("UPNShare API devolvió código: ${response.status}")
+                source.isMp4Upload -> {
+                    val response = httpClient.get(source.embedUrl) {
+                        header("User-Agent", DEFAULT_USER_AGENT)
+                        header("Referer", "$BASE_URL/")
+                    }
+                    val html = response.bodyAsText()
+                    val unpacked = unpackJsEvalIfPresent(html)
+                    val combined = if (unpacked.isNotEmpty()) "$html\n$unpacked" else html
+                    val mp4Match = Regex("""src:\s*["'](https?://[^"']+\.mp4[^"']*)["']""").find(combined)?.groupValues?.get(1)
+                        ?: Regex("""player\.src\(\s*\{[^\}]*src:\s*["'](https?://[^"']+\.mp4[^"']*)["']""").find(combined)?.groupValues?.get(1)
+                        ?: throw IllegalStateException("No se encontró URL de video en MP4Upload")
+
+                    WebStreamSource(
+                        title = source.displayName,
+                        serverName = "MP4Upload",
+                        streamUrl = mp4Match,
+                        headers = mapOf(
+                            "Referer" to "https://www.mp4upload.com/",
+                            "User-Agent" to DEFAULT_USER_AGENT,
+                        ),
+                        quality = "1080p",
+                        isHls = false,
+                        isDub = source.isDub,
+                    )
                 }
 
-                val hexPayload = response.bodyAsText().trim()
-                val decryptedJson = AnimeAV1Cipher.decryptHex(hexPayload)
+                source.server.equals("YourUpload", ignoreCase = true) -> {
+                    val response = httpClient.get(source.embedUrl) {
+                        header("User-Agent", DEFAULT_USER_AGENT)
+                        header("Referer", "$BASE_URL/")
+                    }
+                    val html = response.bodyAsText()
+                    val mp4Match = Regex("""file:\s*["']([^"']+\.mp4[^"']*)["']""").find(html)?.groupValues?.get(1)
+                        ?: throw IllegalStateException("No se encontró URL de video en YourUpload")
 
-                // Extraer cfNative primero (el master m3u8 con proxy en Cloudflare), o cf, o source
-                val cfNative = Regex(""""cfNative":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                    ?.replace("\\/", "/")
-                val cf = Regex(""""cf":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                    ?.replace("\\/", "/")
-                val sourceUrl = Regex(""""source":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                    ?.replace("\\/", "/")
-
-                val targetStream = cfNative ?: cf ?: sourceUrl
-                ?: throw IllegalStateException("No se encontró URL de stream en la respuesta descifrada de UPN")
-
-                WebStreamSource(
-                    title = "AnimeAV1 (UPN - HLS Directo)",
-                    serverName = "UPNShare",
-                    streamUrl = targetStream,
-                    headers = mapOf(
-                        "Referer" to "$UNS_BIO_BASE/",
-                        "Origin" to UNS_BIO_BASE,
-                        "User-Agent" to DEFAULT_USER_AGENT,
-                        "Accept" to "*/*",
-                    ),
-                    quality = "1080p",
-                    isHls = true,
-                )
-            } else if (source.server.equals("MP4Upload", ignoreCase = true)) {
-                val response = httpClient.get(source.embedUrl) {
-                    header("User-Agent", DEFAULT_USER_AGENT)
-                    header("Referer", "$BASE_URL/")
+                    WebStreamSource(
+                        title = source.displayName,
+                        serverName = "YourUpload",
+                        streamUrl = mp4Match,
+                        headers = mapOf(
+                            "Referer" to source.embedUrl,
+                            "User-Agent" to DEFAULT_USER_AGENT,
+                        ),
+                        quality = "1080p",
+                        isHls = false,
+                        isDub = source.isDub,
+                    )
                 }
-                val html = response.bodyAsText()
-                val mp4Match = Regex("""src:\s*"(https://[^"]+\.mp4)"""").find(html)?.groupValues?.get(1)
-                    ?: Regex("""player\.src\(\s*\{[^\}]*src:\s*"(https://[^"]+\.mp4)"""").find(html)?.groupValues?.get(1)
-                    ?: throw IllegalStateException("No se encontró URL de video en MP4Upload")
 
-                WebStreamSource(
-                    title = "AnimeAV1 (MP4Upload - 1080p)",
-                    serverName = "MP4Upload",
-                    streamUrl = mp4Match,
-                    headers = mapOf(
-                        "Referer" to "https://www.mp4upload.com/",
-                        "User-Agent" to DEFAULT_USER_AGENT,
-                    ),
-                    quality = "1080p",
-                    isHls = false,
-                )
-            } else if (source.server.equals("YourUpload", ignoreCase = true)) {
-                val response = httpClient.get(source.embedUrl) {
-                    header("User-Agent", DEFAULT_USER_AGENT)
-                    header("Referer", "$BASE_URL/")
-                }
-                val html = response.bodyAsText()
-                val mp4Match = Regex("""file:\s*["']([^"']+\.mp4[^"']*)["']""").find(html)?.groupValues?.get(1)
-                    ?: throw IllegalStateException("No se encontró URL de video en YourUpload")
+                source.isVoe -> extractVoeStream(source)
 
-                WebStreamSource(
-                    title = "AnimeAV1 (YourUpload - 1080p)",
-                    serverName = "YourUpload",
-                    streamUrl = mp4Match,
-                    headers = mapOf(
-                        "Referer" to source.embedUrl,
-                        "User-Agent" to DEFAULT_USER_AGENT,
-                    ),
-                    quality = "1080p",
-                    isHls = false,
-                )
-            } else {
-                // Fallback para otros servidores embebidos
-                WebStreamSource(
-                    title = "AnimeAV1 (${source.server})",
-                    serverName = source.server,
-                    streamUrl = source.embedUrl,
-                    headers = mapOf("Referer" to "$BASE_URL/"),
-                    quality = source.quality,
-                    isHls = false,
-                )
+                source.isVidHide -> extractVidHideStream(source)
+
+                source.isStreamTape -> extractStreamTapeStream(source)
+
+                else -> throw UnsupportedOperationException("Servidor web sin extractor directo soportado: ${source.server}")
             }
             resolvedStreamCache[source.embedUrl] = webStream
             webStream
         }
     }
 
+    private suspend fun extractVoeStream(source: AnimeAV1Source): WebStreamSource {
+        var currentUrl = source.embedUrl
+        var html = httpClient.get(currentUrl) {
+            header("User-Agent", DEFAULT_USER_AGENT)
+            header("Referer", "$BASE_URL/")
+        }.bodyAsText()
+
+        // Voe frecuentemente redirige por JS: window.location.href = 'https://...'
+        val jsRedirect = Regex("""window\.location\.href\s*=\s*['"](https?://[^'"]+)['"]""").find(html)?.groupValues?.get(1)
+        if (!jsRedirect.isNullOrBlank()) {
+            currentUrl = jsRedirect
+            html = httpClient.get(currentUrl) {
+                header("User-Agent", DEFAULT_USER_AGENT)
+                header("Referer", source.embedUrl)
+            }.bodyAsText()
+        }
+
+        // 1. Buscar hls codificado en Base64 o enlace directo m3u8
+        val hlsRaw = Regex("""['"]hls['"]\s*:\s*['"]([^'"]+)['"]""").find(html)?.groupValues?.get(1)
+        val decodedHls = hlsRaw?.let { raw ->
+            if (raw.startsWith("http", ignoreCase = true)) {
+                raw
+            } else {
+                runCatching {
+                    String(java.util.Base64.getDecoder().decode(raw), StandardCharsets.UTF_8)
+                }.getOrNull()?.takeIf { it.startsWith("http", ignoreCase = true) }
+            }
+        }
+
+        val streamUrl = decodedHls
+            ?: Regex("""(https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*)""").find(html)?.groupValues?.get(1)
+            ?: throw IllegalStateException("No se encontró stream HLS en Voe")
+
+        val originDomain = Regex("""^(https?://[^/]+)""").find(currentUrl)?.groupValues?.get(1) ?: "https://voe.sx"
+        return WebStreamSource(
+            title = source.displayName,
+            serverName = "Voe",
+            streamUrl = streamUrl.replace("\\/", "/"),
+            headers = mapOf(
+                "Referer" to "$originDomain/",
+                "Origin" to originDomain,
+                "User-Agent" to DEFAULT_USER_AGENT,
+            ),
+            quality = "720p",
+            isHls = true,
+            isDub = source.isDub,
+        )
+    }
+
+    private suspend fun extractVidHideStream(source: AnimeAV1Source): WebStreamSource {
+        val response = httpClient.get(source.embedUrl) {
+            header("User-Agent", DEFAULT_USER_AGENT)
+            header("Referer", "$BASE_URL/")
+        }
+        val html = response.bodyAsText()
+        val unpacked = unpackJsEvalIfPresent(html)
+        val combined = "$unpacked\n$html"
+
+        val m3u8Match = Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(combined)?.groupValues?.get(1)
+            ?: Regex("""(https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*)""").find(combined)?.groupValues?.get(1)
+            ?: throw IllegalStateException("No se encontró URL m3u8 en VidHide")
+
+        val originDomain = Regex("""^(https?://[^/]+)""").find(source.embedUrl)?.groupValues?.get(1) ?: BASE_URL
+        return WebStreamSource(
+            title = source.displayName,
+            serverName = source.server,
+            streamUrl = m3u8Match.replace("\\/", "/"),
+            headers = mapOf(
+                "Referer" to "$originDomain/",
+                "Origin" to originDomain,
+                "User-Agent" to DEFAULT_USER_AGENT,
+            ),
+            quality = "1080p",
+            isHls = true,
+            isDub = source.isDub,
+        )
+    }
+
+    private suspend fun extractStreamTapeStream(source: AnimeAV1Source): WebStreamSource {
+        val response = httpClient.get(source.embedUrl) {
+            header("User-Agent", DEFAULT_USER_AGENT)
+            header("Referer", "$BASE_URL/")
+        }
+        val html = response.bodyAsText()
+
+        // StreamTape construye el enlace mediante innerHTML = '//streamtape.../get_video?...' + ('xcd...').substring(...)
+        val robotRegex = Regex("""getElementById\(['"](?:norobotlink|ideoolink|robotlink)['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*\(['"]([^'"]+)['"]\)\.substring\((\d+)\)(?:\.substring\((\d+)\))?""")
+        val match = robotRegex.find(html)
+        val finalUrl = if (match != null) {
+            val prefix = match.groupValues[1]
+            var tokenPart = match.groupValues[2].substring(match.groupValues[3].toInt())
+            val secondSub = match.groupValues[4].toIntOrNull()
+            if (secondSub != null) {
+                tokenPart = tokenPart.substring(secondSub)
+            }
+            val rawUrl = if (prefix.startsWith("//")) "https:$prefix$tokenPart" else "https://streamtape.com$prefix$tokenPart"
+            if (rawUrl.contains("&stream=")) rawUrl else "$rawUrl&stream=1"
+        } else {
+            val fallbackMatch = Regex("""['"](https?://[^'"]*?/get_video\?id=[^'"]+)['"]""").find(html)?.groupValues?.get(1)
+                ?: throw IllegalStateException("No se encontró enlace de video en StreamTape")
+            if (fallbackMatch.contains("&stream=")) fallbackMatch else "$fallbackMatch&stream=1"
+        }
+
+        return WebStreamSource(
+            title = source.displayName,
+            serverName = "StreamTape",
+            streamUrl = finalUrl,
+            headers = mapOf(
+                "Referer" to source.embedUrl,
+                "User-Agent" to DEFAULT_USER_AGENT,
+            ),
+            quality = "720p",
+            isHls = false,
+            isDub = source.isDub,
+        )
+    }
+
+    /**
+     * Desempaca bloques estándar Dean Edwards Packer: eval(function(p,a,c,k,e,d){...}('payload',radix,count,'symtab'.split('|')))
+     */
+    private fun unpackJsEvalIfPresent(html: String): String {
+        val packedRegex = Regex(
+            """eval\(function\(p,a,c,k,e,[dr]\)\{.*?\}\(\s*'((?:\\.|[^'])*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:\\.|[^'])*)'\.split\('\|'\)""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val match = packedRegex.find(html) ?: return ""
+        val payload = match.groupValues[1]
+        val radix = match.groupValues[2].toIntOrNull() ?: 36
+        val symtab = match.groupValues[4].split("|")
+
+        fun encodeBase(num: Int, base: Int): String {
+            val chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            if (num < base) return chars[num].toString()
+            return encodeBase(num / base, base) + chars[num % base]
+        }
+
+        var result = payload
+        for (i in symtab.indices.reversed()) {
+            val replacement = symtab[i]
+            if (replacement.isNotEmpty()) {
+                val token = encodeBase(i, radix)
+                result = result.replace(Regex("\\b${Regex.escape(token)}\\b"), replacement)
+            }
+        }
+        return result
+    }
+
     /**
      * Comprueba de forma ultrarrápida si el enlace de video está disponible (no 404, no caído).
      */
     suspend fun verifyStreamUrlAlive(url: String, headers: Map<String, String> = emptyMap()): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val response = httpClient.get(url) {
                 headers.forEach { (k, v) -> header(k, v) }
                 header("Range", "bytes=0-10")
@@ -443,31 +609,49 @@ class AnimeAV1Client(
     }
 
     /**
+     * Devuelve un par (hasSub, hasDub) indicando qué pistas de idioma están disponibles en AnimeAV1.
+     */
+    suspend fun getAvailableLanguages(
+        romajiTitle: String,
+        englishTitle: String?,
+        episodeNumber: Int = 1,
+    ): Pair<Boolean, Boolean> = withContext(Dispatchers.IO) {
+        runSuspendCatching {
+            val slug = resolveSlug(romajiTitle, englishTitle)
+            val sources = getEpisodeSources(slug, episodeNumber)
+            val hasSub = sources.any { !it.isDub }
+            val hasDub = sources.any { it.isDub }
+            hasSub to hasDub
+        }.getOrDefault(false to false)
+    }
+
+    /**
      * Resuelve la mejor fuente de streaming rápido para el episodio:
-     * Intenta en cascada en orden de prioridad y verifica que el enlace responda;
+     * Intenta en cascada en orden de prioridad respetando el idioma preferido ([preferDub]);
      * si un servidor está caído (404/500/timeout), salta automáticamente al siguiente espejo.
      */
     suspend fun resolveBestStream(
         romajiTitle: String,
         englishTitle: String?,
         episodeNumber: Int,
+        preferDub: Boolean = false,
     ): Result<WebStreamSource?> = withContext(Dispatchers.IO) {
-        runCatching {
+        runSuspendCatching {
             val slug = resolveSlug(romajiTitle, englishTitle)
             val sources = getEpisodeSources(slug, episodeNumber)
             if (sources.isEmpty()) {
                 logger.info("No se encontraron fuentes en AnimeAV1 para slug '$slug' ep $episodeNumber")
-                return@runCatching null
+                return@runSuspendCatching null
             }
 
-            // Filtrar preferentemente pistas SUB
-            val subSources = sources.filter { !it.isDub }.ifEmpty { sources }
+            // Filtrar preferentemente el idioma elegido (SUB o LAT); si no existe en ese idioma, caer al otro
+            val preferredSources = sources.filter { it.isDub == preferDub }.ifEmpty { sources }
 
             // Resolver en PARALELO los 3 mejores servidores y devolver el primero (por prioridad)
             // que resuelva bien. Ya no se hace verifyStreamUrlAlive en el camino crítico:
             // ExoPlayer falla rápido si el enlace está caído y el usuario puede cambiar de fuente.
             coroutineScope {
-                val deferred = subSources.take(3).map { src ->
+                val deferred = preferredSources.take(3).map { src ->
                     async {
                         withTimeoutOrNull(5_000L) {
                             resolveStream(src).getOrNull()
@@ -478,7 +662,7 @@ class AnimeAV1Client(
                     for (d in deferred) {
                         val stream = d.await()
                         if (stream != null) {
-                            logger.info("Fuente resuelta: ${stream.serverName} -> ${stream.streamUrl}")
+                            logger.info("Fuente resuelta: ${stream.serverName} (dub=${stream.isDub}) -> ${stream.streamUrl}")
                             return@coroutineScope stream
                         }
                     }
@@ -491,7 +675,7 @@ class AnimeAV1Client(
     }
 
     /**
-     * Fallback automático: devuelve el siguiente servidor SUB que resuelva bien, saltando los ya probados.
+     * Fallback automático: devuelve el siguiente servidor del idioma elegido que resuelva bien, saltando los ya probados.
      * Invalida en caché el stream que falló para que no se vuelva a servir en la próxima reproducción.
      */
     suspend fun resolveNextStream(
@@ -500,17 +684,22 @@ class AnimeAV1Client(
         episodeNumber: Int,
         triedServers: Set<String>,
         failed: WebStreamSource? = null,
+        preferDub: Boolean = failed?.isDub ?: false,
     ): WebStreamSource? = withContext(Dispatchers.IO) {
-        failed?.let { f -> resolvedStreamCache.entries.removeAll { it.value.streamUrl == f.streamUrl } }
-        runCatching {
+        failed?.let { f ->
+            resolvedStreamCache.removeIf {
+                it.streamUrl == f.streamUrl || (it.serverName.equals(f.serverName, ignoreCase = true) && it.isDub == f.isDub)
+            }
+        }
+        runSuspendCatching {
             val slug = resolveSlug(romajiTitle, englishTitle)
             val sources = getEpisodeSources(slug, episodeNumber)
-            val subs = sources.filter { !it.isDub }.ifEmpty { sources }
-            for (src in subs) {
+            val candidates = sources.filter { it.isDub == preferDub }.ifEmpty { sources }
+            for (src in candidates) {
                 if (triedServers.any { it.equals(src.server, ignoreCase = true) }) continue
                 val stream = resolveStream(src).getOrNull() ?: continue
-                logger.info("Fallback -> ${stream.serverName}: ${stream.streamUrl}")
-                return@runCatching stream
+                logger.info("Fallback -> ${stream.serverName} (dub=${stream.isDub}): ${stream.streamUrl}")
+                return@runSuspendCatching stream
             }
             null
         }.getOrNull()
@@ -523,9 +712,10 @@ class AnimeAV1Client(
         romajiTitle: String,
         englishTitle: String?,
         episodeNumber: Int,
+        preferDub: Boolean = false,
     ) = withContext(Dispatchers.IO) {
-        runCatching {
-            resolveBestStream(romajiTitle, englishTitle, episodeNumber)
+        runSuspendCatching {
+            resolveBestStream(romajiTitle, englishTitle, episodeNumber, preferDub = preferDub)
         }
     }
 }
