@@ -32,17 +32,7 @@ dependencyResolutionManagement {
 }
 
 plugins {
-    id("com.gradle.develocity") version "4.3.2"
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
-}
-
-develocity {
-    buildScan {
-        publishing.onlyIf { !System.getenv("CI").isNullOrEmpty() }
-        termsOfUseUrl = "https://gradle.com/terms-of-service"
-        termsOfUseAgree = "yes"
-        uploadInBackground = System.getenv("CI").isNullOrEmpty()
-    }
 }
 
 fun includeProject(projectPath: String, dir: String? = null) {

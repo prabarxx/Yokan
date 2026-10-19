@@ -1,0 +1,1 @@
+Native anime player for Android with direct streaming, SUB/LAT switch & torrent

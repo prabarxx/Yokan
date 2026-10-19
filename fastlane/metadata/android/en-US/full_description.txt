@@ -1,0 +1,8 @@
+Yokan is a native Android anime client and player built with Jetpack Compose and Media3. It integrates the AniList GraphQL catalog with a hybrid playback engine featuring direct web stream extraction (1080p HLS/MP4), instant live language switching (Subtitled / Latin Spanish Dub), and on-demand P2P BitTorrent streaming via Anitorrent (libtorrent + libass).
+
+Key features:
+• Ad-free direct streaming with parallel resolver and automatic failover.
+• Instant SUB / LAT audio/subtitle switching while preserving playback position.
+• On-demand BitTorrent P2P streaming (Nyaa.si) with sequential piece prioritization.
+• Native Media3 (ExoPlayer) + libass renderer for styled ASS/SSA subtitles.
+• AniList catalog browsing, franchise chronology, local watch history, and cache management.

@@ -10,11 +10,9 @@ plugins {
     alias(libs.plugins.kotlin.plugin.compose) apply false
 
     alias(libs.plugins.kotlin.plugin.serialization) apply false
-    alias(libs.plugins.google.gms.google.services) apply false
     alias(libs.plugins.androidx.room) apply false
     alias(libs.plugins.antlr.kotlin) apply false
     alias(libs.plugins.mannodermaus.android.junit5) apply false
-    alias(libs.plugins.sentry.kotlin.multiplatform) apply false
     alias(libs.plugins.undercouch.download) apply false
     alias(libs.plugins.compose.stability.analyzer) apply false
     idea

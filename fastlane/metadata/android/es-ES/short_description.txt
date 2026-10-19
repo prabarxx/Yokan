@@ -1,0 +1,1 @@
+Reproductor nativo de anime con streaming directo, selector SUB/LAT y BitTorrent

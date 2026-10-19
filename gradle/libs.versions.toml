@@ -20,12 +20,10 @@ ksp = "2.3.10" # https://github.com/google/ksp/releases
 # note: room 2.7.0-rc01 cannot compile
 room = "2.8.4" # https://developer.android.com/jetpack/androidx/releases/room#declaring_dependencies
 s3 = "2.42.14"
-sentry-kotlin-multiplatform = "0.11.0"
 sqlite = "2.6.1"
 androidx-activity = "1.12.4"
 androidx-core = "1.17.0"
 stability-analyzer = "0.12.0"
-google-gms-google-services = "4.4.2"
 mannodermaus-android-junit5 = "1.11.2.0"
 undercouch-download = "5.6.0"
 
@@ -82,12 +80,6 @@ jsystemthemedetector = "3.9"
 materialkolor = "2.0.2"
 mockito = "5.12.0"
 mockito-kotlin = "5.4.0"
-sentry-kmp = "0.12.0" # used in plugins, don't remove # https://mvnrepository.com/artifact/io.sentry/sentry-kotlin-multiplatform-gradle-plugin
-sentry-compose-android = "8.23.0" # https://docs.sentry.io/platforms/android/integrations/jetpack-compose/
-gitlive-firebase = "2.3.0"
-google-firebase = "22.0.1"
-posthog-android = "3.11.3"
-posthog-java = "1.2.0"
 onnxruntime = "1.22.0"
 openapi-generator = "7.13.0"
 mediamp = "0.3.2"
@@ -113,12 +105,10 @@ kotlin-native-cocoapods = { id = "org.jetbrains.kotlin.native.cocoapods", versio
 kotlin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize" }
 
 kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-google-gms-google-services = { id = "com.google.gms.google-services", version.ref = "google-gms-google-services" }
 google-devtools-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 androidx-room = { id = "androidx.room", version.ref = "room" }
 antlr-kotlin = { id = "com.strumenta.antlr-kotlin", version.ref = "antlr-kotlin" }
 mannodermaus-android-junit5 = { id = "de.mannodermaus.android-junit5", version.ref = "mannodermaus-android-junit5" }
-sentry-kotlin-multiplatform = { id = "io.sentry.kotlin.multiplatform.gradle", version.ref = "sentry-kmp" }
 undercouch-download = { id = "de.undercouch.download", version.ref = "undercouch-download" }
 openapi-generator = { id = "org.openapi.generator", version.ref = "openapi-generator" }
 compose-stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version.ref = "stability-analyzer" }
@@ -338,15 +328,7 @@ materialkolor = { module = "com.materialkolor:material-kolor", version.ref = "ma
 constraintlayout-compose = { module = "tech.annexflow.compose:constraintlayout-compose-multiplatform", version.ref = "constraintlayout-compose" }
 bytebuddy-agent = { module = "net.bytebuddy:byte-buddy-agent", version.ref = "bytebuddy" }
 bytebuddy = { module = "net.bytebuddy:byte-buddy", version.ref = "bytebuddy" }
-sentry-kotlin-multiplatform = { module = "io.sentry:sentry-kotlin-multiplatform", version.ref = "sentry-kotlin-multiplatform" }
-sentry-compose-android = { module = "io.sentry:sentry-compose-android", version.ref = "sentry-compose-android" }
 awssdk-s3 = { module = "software.amazon.awssdk:s3", version.ref = "s3" }
 kmpalette-core = { module = "com.materialkolor.palette:core", version.ref = "kmpalette" }
 haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 aboutlibraries-compose-m3 = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutlibraries" }
-
-firebase-analytics = { module = "dev.gitlive:firebase-analytics", version.ref = "gitlive-firebase" }
-google-firebase-common = { module = "com.google.firebase:firebase-common", version.ref = "google-firebase" }
-google-firebase-analytics = { module = "com.google.firebase:firebase-analytics", version.ref = "google-firebase" }
-posthog-android = { module = "com.posthog:posthog-android", version.ref = "posthog-android" }
-posthog-java = { module = "com.posthog.java:posthog", version.ref = "posthog-java" }

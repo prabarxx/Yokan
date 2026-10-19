@@ -1,0 +1,33 @@
+Categories:
+  - Multimedia
+License: AGPL-3.0-only
+SourceCode: https://github.com/prabarxx/Yokan
+IssueTracker: https://github.com/prabarxx/Yokan/issues
+Changelog: https://github.com/prabarxx/Yokan/releases
+
+AutoName: Yokan
+
+RepoType: git
+Repo: https://github.com/prabarxx/Yokan.git
+
+Builds:
+  - versionName: 2.4.7
+    versionCode: 20407
+    commit: v2.4.7
+    subdir: app/android
+    sudo:
+      - apt-get update
+      - apt-get install -y openjdk-21-jdk-headless
+    output: build/outputs/apk/default/release/android-default-arm64-v8a-release-unsigned.apk
+    srclibs: []
+    prebuild:
+      - echo "ani.android.abis=arm64-v8a" >> ../../local.properties
+      - echo "ani.enable.firebase=false" >> ../../local.properties
+      - echo "kotlin.native.ignoreDisabledTargets=true" >> ../../local.properties
+    gradle:
+      - default
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 2.4.7
+CurrentVersionCode: 20407

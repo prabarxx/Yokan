@@ -1,0 +1,8 @@
+Yokan es un cliente y reproductor nativo de anime para Android diseñado para ofrecer reproducción inmediata sin anuncios ni navegadores intermedios. Integra el catálogo de AniList GraphQL con un motor de reproducción híbrido que prioriza flujos web directos (HLS / MP4 1080p) y habilita bajo demanda el streaming P2P mediante BitTorrent (Anitorrent / libtorrent).
+
+Características principales:
+• Streaming directo sin anuncios: Resolución paralela de servidores con inicio rápido y escalado automático a 1080p.
+• Selector de idioma en vivo (SUB / LAT): Alterna entre Subtitulado y Español Latino desde la ficha del anime o directamente desde el reproductor conservando el segundo exacto de reproducción.
+• Motor BitTorrent P2P bajo demanda: Búsqueda integrada en Nyaa.si con priorización secuencial de piezas para reproducción en tiempo real.
+• Reproductor nativo Media3 + libass: Renderizado nativo de subtítulos estilizados ASS/SSA, gestos táctiles de brillo y volumen, salto de opening y avance automático de episodio.
+• Catálogo AniList GraphQL: Tendencias, búsqueda en tiempo real, orden cronológico de franquicias (precuelas/secuelas) e historial local persistente.
