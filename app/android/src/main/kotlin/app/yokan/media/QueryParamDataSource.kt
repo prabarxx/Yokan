@@ -48,9 +48,9 @@ private class QueryParamDataSource(
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
         delegate.read(buffer, offset, length)
 
-    override fun getUri(): Uri = openedUri ?: delegate.getUri()
+    override fun getUri(): Uri? = openedUri ?: delegate.uri
 
-    override fun getResponseHeaders(): Map<String, List<String>> = delegate.getResponseHeaders()
+    override fun getResponseHeaders(): Map<String, List<String>> = delegate.responseHeaders
 
     override fun close() = delegate.close()
 }
@@ -67,13 +67,17 @@ private fun DataSpec.withQueryParams(params: Map<String, String>, hosts: Set<Str
     val missing = params.filter { (key, value) -> uri.getQueryParameter(key) != value }
     if (missing.isEmpty()) return this
 
-    val builder = uri.buildUpon()
-    missing.forEach { (key, value) ->
-        if (uri.getQueryParameter(key) != null) {
-            builder.setQueryParameter(key, value)
-        } else {
-            builder.appendQueryParameter(key, value)
+    val existingNames = uri.queryParameterNames
+    val builder = uri.buildUpon().clearQuery()
+    for (name in existingNames) {
+        if (name !in params) {
+            for (existingValue in uri.getQueryParameters(name)) {
+                builder.appendQueryParameter(name, existingValue)
+            }
         }
+    }
+    for ((key, value) in params) {
+        builder.appendQueryParameter(key, value)
     }
     return withUri(builder.build())
 }
