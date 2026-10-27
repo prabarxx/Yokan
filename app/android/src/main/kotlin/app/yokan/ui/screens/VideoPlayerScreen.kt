@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -991,6 +993,7 @@ fun VideoPlayerScreen(
             VideoScaffold(
                 expanded = isFullscreen,
                 modifier = Modifier.fillMaxSize(),
+                contentWindowInsets = WindowInsets.displayCutout,
                 maintainAspectRatio = false,
                 controllerState = controllerState,
                 gestureLocked = isLocked,
@@ -1117,59 +1120,8 @@ fun VideoPlayerScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable(remember { MutableInteractionSource() }, null, onClick = {})
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                            .padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
                     ) {
-                        if (!sliderOnly) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Surface(
-                                    onClick = {
-                                        val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
-                                        val target = (current + 85_000L).coerceIn(
-                                            0L,
-                                            if (exoDuration > 0L) exoDuration else Long.MAX_VALUE
-                                        )
-                                        exoPlayer?.seekTo(target)
-                                        player.skip(85_000L)
-                                    },
-                                    color = Color.White.copy(alpha = 0.16f),
-                                    shape = RoundedCornerShape(50),
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    ) {
-                                        Icon(
-                                            AniIcons.Forward85,
-                                            contentDescription = "Saltar intro (+85s)",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                        Text(
-                                            text = "Saltar intro",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                    }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(2.dp))
-                        }
-
-                        MediaProgressSlider(
-                            state = progressSliderState,
-                            cacheProgressInfoFlow = { cacheProgressInfo },
-                            showPreviewTimeTextOnThumb = isFullscreen,
-                            framePreview = null,
-                            showFramePreviewInPopup = isFullscreen,
-                            touchSeekState = touchSeekState,
-                        )
-
                         if (!sliderOnly) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1203,24 +1155,71 @@ fun VideoPlayerScreen(
                                     }
                                 }
 
-                                val currentSpeed = playbackSpeedControllerState?.currentSpeed ?: 1.0f
-                                if (currentSpeed != 1.0f) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    val currentSpeed = playbackSpeedControllerState?.currentSpeed ?: 1.0f
+                                    if (currentSpeed != 1.0f) {
+                                        Surface(
+                                            onClick = { showSettingsSheet = true },
+                                            color = Color.White.copy(alpha = 0.14f),
+                                            shape = RoundedCornerShape(50),
+                                        ) {
+                                            Text(
+                                                text = "${currentSpeed}x",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            )
+                                        }
+                                    }
+
                                     Surface(
-                                        onClick = { showSettingsSheet = true },
-                                        color = Color.White.copy(alpha = 0.14f),
+                                        onClick = {
+                                            val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
+                                            val target = (current + 85_000L).coerceIn(
+                                                0L,
+                                                if (exoDuration > 0L) exoDuration else Long.MAX_VALUE
+                                            )
+                                            exoPlayer?.seekTo(target)
+                                            player.skip(85_000L)
+                                        },
+                                        color = Color.White.copy(alpha = 0.16f),
                                         shape = RoundedCornerShape(50),
                                     ) {
-                                        Text(
-                                            text = "${currentSpeed}x",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            Icon(
+                                                AniIcons.Forward85,
+                                                contentDescription = "Saltar intro (+85s)",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                            Text(
+                                                text = "Saltar intro",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
+
+                        MediaProgressSlider(
+                            state = progressSliderState,
+                            cacheProgressInfoFlow = { cacheProgressInfo },
+                            showPreviewTimeTextOnThumb = isFullscreen,
+                            framePreview = null,
+                            showFramePreviewInPopup = isFullscreen,
+                            touchSeekState = touchSeekState,
+                        )
                     }
                 }
             )
