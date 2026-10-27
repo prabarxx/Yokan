@@ -56,6 +56,16 @@ data class WebStreamSource(
     val quality: String = "1080p",
     val isHls: Boolean = true,
     val isDub: Boolean = false,
+    /**
+     * Parámetros de query que el CDN exige en **todas** las peticiones de la secuencia
+     * (manifest, playlists de variante y segmentos).
+     *
+     * El CDN de UPNShare (`uns.bio`) protege sus archivos con un token (`k`/`kx`) que llega
+     * en el campo `pk` de la respuesta cifrada. Los playlists referencian los segmentos con
+     * URLs *relativas*, así que el reproductor las resuelve sin el query original y el CDN
+     * responde 403. Estos parámetros se reinyectan en cada petición (ver `QueryParamDataSource`).
+     */
+    val queryParams: Map<String, String> = emptyMap(),
 )
 
 sealed interface PlayableSource {

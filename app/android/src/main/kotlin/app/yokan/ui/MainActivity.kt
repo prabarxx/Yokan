@@ -365,11 +365,18 @@ private fun YokanApp(
                 }
                 is Screen.Details -> {
                     LaunchedEffect(screen.anime.id, preferDub) {
-                        // Precarga en segundo plano mientras el usuario visualiza los detalles del anime
+                        // Precarga en segundo plano mientras el usuario visualiza los detalles del anime.
+                        // Se precarga el episodio que realmente va a reproducir (el de "Continuar
+                        // viendo"); antes se precargaba siempre el 1, así que la precarga no servía
+                        // para nada cuando el usuario pulsaba otro episodio.
+                        val episodeToPrefetch = watchHistoryManager.getProgress(screen.anime.id)
+                            ?.episode
+                            ?.takeIf { it > 0 }
+                            ?: 1
                         animeAV1Client.prefetchEpisode(
                             romajiTitle = screen.anime.title.romaji,
                             englishTitle = screen.anime.title.english,
-                            episodeNumber = 1,
+                            episodeNumber = episodeToPrefetch,
                             preferDub = preferDub,
                         )
                     }
