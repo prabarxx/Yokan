@@ -846,8 +846,29 @@ fun VideoPlayerScreen(
                         }
                     }
                 )
+
+                runCatching {
+                    val exactSaveDir = downloader.getSaveDirForTorrent(encodedInfo).absolutePath
+                    app.yokan.media.CacheStorageManager.getInstance(context).recordCachedTorrent(
+                        title = targetFile.fileName.ifBlank { currentTorrent.title },
+                        magnetUrl = currentTorrent.magnetUrl,
+                        torrentUrl = currentTorrent.torrentUrl,
+                        fileSizeBytes = targetFile.length,
+                        infoHash = currentTorrent.infoHash,
+                        saveDirPath = exactSaveDir,
+                    )
+                }
+
+                loadingStatus = "Iniciando búfer de video..."
+                player.setMediaData(
+                    mediaData,
+                    playWhenReady = true,
+                    startPositionMillis = initialPositionMillis.coerceAtLeast(0L),
+                )
                 currentMediaData = mediaData
                 sessionTransferredToMediaData = true
+                runCatching { player.play() }
+                loadingStatus = null
             } finally {
                 if (!sessionTransferredToMediaData) {
                     withContext(NonCancellable) {
@@ -856,27 +877,6 @@ fun VideoPlayerScreen(
                     }
                 }
             }
-
-            runCatching {
-                val exactSaveDir = downloader.getSaveDirForTorrent(encodedInfo).absolutePath
-                app.yokan.media.CacheStorageManager.getInstance(context).recordCachedTorrent(
-                    title = targetFile.fileName.ifBlank { currentTorrent.title },
-                    magnetUrl = currentTorrent.magnetUrl,
-                    torrentUrl = currentTorrent.torrentUrl,
-                    fileSizeBytes = targetFile.length,
-                    infoHash = currentTorrent.infoHash,
-                    saveDirPath = exactSaveDir,
-                )
-            }
-
-            loadingStatus = "Iniciando búfer de video..."
-            player.setMediaData(
-                mediaData,
-                playWhenReady = true,
-                startPositionMillis = initialPositionMillis.coerceAtLeast(0L),
-            )
-            runCatching { player.play() }
-            loadingStatus = null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
