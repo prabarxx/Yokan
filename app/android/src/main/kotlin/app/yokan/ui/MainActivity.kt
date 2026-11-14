@@ -241,6 +241,7 @@ private fun YokanApp(
             playerScreen.episode,
             playerScreen.webStream?.streamUrl,
             playerScreen.torrent?.magnetUrl,
+            playerScreen.torrent?.torrentUrl,
         ) {
         VideoPlayerScreen(
             torrent = playerScreen.torrent,
@@ -254,13 +255,18 @@ private fun YokanApp(
             hasBothLanguages = hasBothLanguages,
             onToggleAudioLanguage = if (playerScreen.anime != null && playerScreen.episode != null) {
                 { targetDub ->
-                    watchHistoryManager.setPreferDub(targetDub)
-                    animeAV1Client.resolveBestStream(
+                    val resolved = animeAV1Client.resolveBestStream(
                         romajiTitle = playerScreen.anime.title.romaji,
                         englishTitle = playerScreen.anime.title.english,
                         episodeNumber = playerScreen.episode,
                         preferDub = targetDub,
                     ).getOrNull()
+                    if (resolved != null && resolved.isDub == targetDub) {
+                        watchHistoryManager.setPreferDub(targetDub)
+                        resolved
+                    } else {
+                        null
+                    }
                 }
             } else null,
             onChangeSource = if (playerScreen.anime != null && playerScreen.episode != null) {

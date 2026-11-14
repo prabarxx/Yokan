@@ -438,16 +438,7 @@ private fun WebStreamRow(
     onClick: () -> Unit,
 ) {
     val languageText = if (source.isDub) "Español Latino" else "Sub Español"
-    val cleanName = remember(source) {
-        when {
-            source.isUpn -> "UPNShare"
-            source.isMp4Upload -> "MP4Upload"
-            source.isVoe -> "Voe"
-            source.isVidHide -> "VidHide"
-            source.isStreamTape -> "StreamTape"
-            else -> source.server
-        }
-    }
+    val cleanName = remember(source) { source.canonicalServerName }
     Surface(
         modifier = Modifier
             .fillMaxWidth()

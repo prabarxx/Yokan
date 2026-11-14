@@ -23,6 +23,7 @@ class NyaaSearchEngine(
     private val multiSubRegex = Regex("""(?i)\b(?:multiple\s+subtitles?|multi-?subs?)\b""")
     private val explicitSpanishRegex = Regex("""(?i)(?:\[|\()(?:SPA|SPA-LA|Castellano|Latino|Spanish|ESP|ES|LAT|ESP-LAT|SPA-LAT)(?:\]|\))""")
     private val spanishWordRegex = Regex("""(?i)\b(?:Español|Espanol|Castellano|Latino|Sub\s*Español|Sub\s*Espanol|Audio\s*Latino|Audio\s*Castellano)\b""")
+    private val xmlEntityRegex = Regex("""&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);""")
 
     private val fastTrackers = listOf(
         "http://nyaa.tracker.wf:7777/announce",
@@ -389,7 +390,29 @@ class NyaaSearchEngine(
     }
 
     private fun cleanCdata(str: String): String {
-        return str.removePrefix("<![CDATA[").removeSuffix("]]>").trim()
+        val stripped = str.removePrefix("<![CDATA[").removeSuffix("]]>").trim()
+        return unescapeXml(stripped)
+    }
+
+    private fun unescapeXml(str: String): String {
+        if ('&' !in str) return str
+        return xmlEntityRegex.replace(str) { match ->
+            when (val entity = match.groupValues[1]) {
+                "amp" -> "&"
+                "lt" -> "<"
+                "gt" -> ">"
+                "quot" -> "\""
+                "apos" -> "'"
+                else -> {
+                    val code = if (entity.startsWith("#x", ignoreCase = true)) {
+                        entity.substring(2).toIntOrNull(16)
+                    } else {
+                        entity.substring(1).toIntOrNull()
+                    }
+                    if (code != null && code in 1..0xFFFF) Char(code).toString() else match.value
+                }
+            }
+        }
     }
 
     private fun detectQuality(title: String): String {
@@ -522,15 +545,7 @@ class NyaaSearchEngine(
     private fun checkEpisodeMatch(title: String, episodeNumber: Int, absoluteEpisodeNumber: Int?): Double {
         val targets = listOfNotNull(episodeNumber, absoluteEpisodeNumber).distinct()
         for (ep in targets) {
-            val patterns = listOf(
-                Regex("""(?i)[sS]\d+[eE]0*${ep}\b"""),
-                Regex("""(?i)\b(?:ep|episode|cap|capitulo)\.?\s*0*${ep}\b"""),
-                Regex("""(?i)[eE]0*${ep}\b"""),
-                Regex("""[\[\(-]\s*0*${ep}\s*[\]\)-]"""),
-                Regex("""(?:\s|_)0*${ep}(?:\s|_|\.)"""),
-                Regex("""\b0*${ep}\b""")
-            )
-            if (patterns.any { it.containsMatchIn(title) }) {
+            if (EpisodeNumberMatcher.matchesEpisode(title, ep)) {
                 val isExplicitBatch = Regex("""\b0*(\d{1,3})\s*[-~–]\s*0*(\d{1,3})\b""").containsMatchIn(title)
                 return if (isExplicitBatch) 0.6 else 1.0
             }
@@ -548,5 +563,71 @@ class NyaaSearchEngine(
         }
 
         return 0.0
+    }
+}
+
+object EpisodeNumberMatcher {
+    private val seasonPhraseRegex = Regex("""(?i)\b(?:season|temporada|cour|part|parte|vol|volume)\s*\d+\b""")
+    private val ordinalSeasonRegex = Regex("""(?i)\b\d+(?:st|nd|rd|th)\s+(?:season|cour|part)\b""")
+    private val resolutionRegex = Regex("""(?i)\b(?:2160|1080|720|576|480|360)p\b""")
+    private val codecRegex = Regex("""(?i)\b(?:x|h)\.?26[45]\b""")
+    private val bitDepthRegex = Regex("""(?i)\b\d+\s*-?\s*bits?\b""")
+    private val decimalTagRegex = Regex("""\b\d+\.\d+\b""")
+    private val crcRegex = Regex("""\[[0-9a-fA-F]{8}\]""")
+    private val yearRegex = Regex("""\b(?:19|20)\d{2}\b""")
+    private val sxxExxRegex = Regex("""(?i)[sS]\d+[eE]\d+(?:v\d+)?\b""")
+    private val standaloneSeasonRegex = Regex("""(?i)(?<![a-zA-Z0-9])S0*\d{1,2}(?=[\s._\-\[\(]|$)""")
+
+    fun matchPriority(title: String, episodeNumber: Int): Int? {
+        val cleanTitle = title
+            .replace(seasonPhraseRegex, " ")
+            .replace(ordinalSeasonRegex, " ")
+            .replace(resolutionRegex, " ")
+            .replace(codecRegex, " ")
+            .replace(bitDepthRegex, " ")
+            .replace(decimalTagRegex, " ")
+            .replace(crcRegex, " ")
+            .replace(yearRegex, " ")
+
+        val strongPatterns = listOf(
+            Regex("""(?i)[sS]\d+[eE]0*${episodeNumber}(?:v\d+)?\b"""),
+            Regex("""(?i)\b(?:ep|episode|cap|capitulo)\.?\s*0*${episodeNumber}(?:v\d+)?\b"""),
+            Regex("""(?i)(?<![a-zA-Z0-9])[eE]0*${episodeNumber}(?:v\d+)?\b"""),
+            Regex("""(?:^|\s)-\s*0*${episodeNumber}(?:v\d+)?(?=$|[\s_.\[\(\-])"""),
+        )
+        strongPatterns.forEachIndexed { idx, pattern ->
+            if (pattern.containsMatchIn(cleanTitle)) return idx
+        }
+
+        val weakTitle = cleanTitle
+            .replace(sxxExxRegex, " ")
+            .replace(standaloneSeasonRegex, " ")
+
+        val weakPatterns = listOf(
+            Regex("""[\[\(]\s*0*${episodeNumber}(?:v\d+)?\s*[\]\)]"""),
+            Regex("""(?:^|[\s_.\-])0*${episodeNumber}(?:v\d+)?(?=$|[\s_.\[\(\-])"""),
+        )
+        weakPatterns.forEachIndexed { idx, pattern ->
+            if (pattern.containsMatchIn(weakTitle)) return strongPatterns.size + idx
+        }
+
+        return null
+    }
+
+    fun matchesEpisode(title: String, episodeNumber: Int): Boolean =
+        matchPriority(title, episodeNumber) != null
+
+    fun <T> findBestMatch(items: List<T>, episodeNumber: Int, nameSelector: (T) -> String): T? {
+        var bestItem: T? = null
+        var bestPriority = Int.MAX_VALUE
+        for (item in items) {
+            val priority = matchPriority(nameSelector(item), episodeNumber) ?: continue
+            if (priority < bestPriority) {
+                bestPriority = priority
+                bestItem = item
+                if (priority == 0) break
+            }
+        }
+        return bestItem
     }
 }

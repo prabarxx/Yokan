@@ -73,6 +73,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.net.Uri
+import android.widget.Toast
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -81,6 +82,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import app.yokan.datasource.animeav1.WebStreamSource
+import app.yokan.datasource.nyaa.EpisodeNumberMatcher
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
@@ -95,6 +97,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.app.data.models.preference.DarkMode
 import me.him188.ani.app.domain.media.player.ChunkState
@@ -104,6 +107,7 @@ import me.him188.ani.app.platform.features.getComponentAccessorsImpl
 import me.him188.ani.app.platform.findActivity
 import me.him188.ani.app.torrent.api.files.FilePriority
 import me.him188.ani.app.torrent.api.files.TorrentFileEntry
+import me.him188.ani.app.torrent.api.files.TorrentFileHandle
 import me.him188.ani.app.torrent.api.pieces.PieceState
 import me.him188.ani.app.torrent.api.pieces.forEach
 import me.him188.ani.app.torrent.api.pieces.isEmpty
@@ -305,7 +309,6 @@ fun VideoPlayerScreen(
         if (isSwitchingWebSource) return
         val targetDub = !current.isDub
         isSwitchingWebSource = true
-        triedWebServers.clear()
         val pos = exoPlayer?.currentPosition ?: 0L
         if (pos > 2_000L) resumeAfterFallbackMs = pos
         errorMessage = null
@@ -320,9 +323,17 @@ fun VideoPlayerScreen(
             }
             isSwitchingWebSource = false
             if (switched != null) {
+                triedWebServers.clear()
                 activeWebStream = switched
             } else {
                 loadingStatus = null
+                resumeAfterFallbackMs = -1L
+                val targetLabel = if (targetDub) "Español Latino" else "Subtitulado"
+                Toast.makeText(
+                    context,
+                    "No hay servidores disponibles en $targetLabel para este episodio.",
+                    Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }
@@ -342,6 +353,20 @@ fun VideoPlayerScreen(
             if (it > 0 && it != androidx.media3.common.C.TIME_UNSET) it else 0L
         } ?: 0L
         return if (exoDur > 0L) exoDur else (player.mediaProperties.value?.durationMillis ?: 0L)
+    }
+    fun seekToEffective(targetMs: Long) {
+        val clamped = targetMs.coerceAtLeast(0L)
+        if (currentMediaData == null && exoPlayer != null) {
+            exoPlayer.seekTo(clamped)
+        } else {
+            player.seekTo(clamped)
+        }
+    }
+    fun skipEffective(deltaMs: Long) {
+        val current = effectivePositionMillis()
+        val effectiveDur = effectiveDurationMillis()
+        val target = (current + deltaMs).coerceIn(0L, if (effectiveDur > 0L) effectiveDur else Long.MAX_VALUE)
+        seekToEffective(target)
     }
 
     val currentOnNextEpisode by rememberUpdatedState(onNextEpisode)
@@ -644,6 +669,11 @@ fun VideoPlayerScreen(
             runCatching { prev.close() }
         }
         webSourceReady = false
+        exoBufferedPosition = 0L
+        exoPosition = 0L
+        exoDuration = 0L
+        cacheProgressInfo = null
+        cachePercentText = null
         loadingStatus = "Cargando..."
         errorMessage = null
         try {
@@ -689,10 +719,15 @@ fun VideoPlayerScreen(
                     dataSourceFactory
                 }
 
+            val isExplicitMp4 = uri.path?.endsWith(".mp4", ignoreCase = true) == true ||
+                stream.streamUrl.contains(".mp4", ignoreCase = true)
             val isHlsStream = stream.isHls ||
                 stream.streamUrl.contains(".m3u8", ignoreCase = true) ||
-                stream.streamUrl.contains("/pl/", ignoreCase = true) ||
-                stream.streamUrl.contains("master", ignoreCase = true)
+                (!isExplicitMp4 && (
+                    stream.streamUrl.contains("/pl/", ignoreCase = true) ||
+                        Regex("""/master(?:\.m3u8)?(?:$|[?#])""", RegexOption.IGNORE_CASE)
+                            .containsMatchIn(stream.streamUrl)
+                    ))
 
             val mediaItem = MediaItem.Builder()
                 .setUri(uri)
@@ -733,7 +768,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(torrent?.magnetUrl) {
+    LaunchedEffect(torrent?.magnetUrl, torrent?.torrentUrl) {
         val currentTorrent = torrent ?: return@LaunchedEffect
         activeWebStream = null
         currentMediaData?.let { prev ->
@@ -749,61 +784,78 @@ fun VideoPlayerScreen(
 
             loadingStatus = "Obteniendo metadatos del torrent..."
             val directTorrentUrl = currentTorrent.torrentUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+            val hasValidMagnet = currentTorrent.magnetUrl.startsWith("magnet:", ignoreCase = true)
             val encodedInfo = if (directTorrentUrl != null) {
                 runSuspendCatching {
                     downloader.fetchTorrent(directTorrentUrl)
                 }.getOrElse { error ->
+                    if (!hasValidMagnet) throw error
                     logger.warn("Falló descarga directa de .torrent HTTP (${error.message}), recurriendo a magnet...")
                     downloader.fetchTorrent(currentTorrent.magnetUrl)
                 }
             } else {
+                if (!hasValidMagnet && !currentTorrent.magnetUrl.startsWith("http", ignoreCase = true)) {
+                    throw IllegalArgumentException("El torrent no tiene enlace magnet ni URL HTTP válida.")
+                }
                 downloader.fetchTorrent(currentTorrent.magnetUrl)
             }
 
             loadingStatus = "Conectando con peers..."
             val session = downloader.startDownload(encodedInfo)
+            var sessionTransferredToMediaData = false
+            var createdHandle: TorrentFileHandle? = null
+            try {
+                loadingStatus = "Obteniendo lista de archivos..."
+                val files = withTimeoutOrNull(60.seconds) {
+                    session.getFiles()
+                }
 
-            loadingStatus = "Obteniendo lista de archivos..."
-            val files = withTimeoutOrNull(60.seconds) {
-                session.getFiles()
-            }
+                if (files.isNullOrEmpty()) {
+                    errorMessage = "Tiempo de espera agotado buscando fuentes para este torrent."
+                    loadingStatus = null
+                    return@LaunchedEffect
+                }
 
-            if (files.isNullOrEmpty()) {
-                errorMessage = "Tiempo de espera agotado buscando fuentes para este torrent."
-                loadingStatus = null
-                return@LaunchedEffect
-            }
+                val videoExtensions = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov", ".flv", ".wmv")
+                val videoFiles = files.filter { file ->
+                    videoExtensions.any { ext -> file.fileName.endsWith(ext, ignoreCase = true) }
+                }
+                val targetFile = findMatchingEpisodeFile(videoFiles, episodeNumber, absoluteEpisodeNumber)
+                    ?: videoFiles.maxByOrNull { it.length }
+                    ?: files.maxByOrNull { it.length }
 
-            val videoExtensions = listOf(".mkv", ".mp4", ".avi", ".webm", ".mov", ".flv", ".wmv")
-            val videoFiles = files.filter { file ->
-                videoExtensions.any { ext -> file.fileName.endsWith(ext, ignoreCase = true) }
-            }
-            val targetFile = findMatchingEpisodeFile(videoFiles, episodeNumber, absoluteEpisodeNumber)
-                ?: videoFiles.maxByOrNull { it.length }
-                ?: files.maxByOrNull { it.length }
+                if (targetFile == null || targetFile.length <= 0) {
+                    errorMessage = "No se encontró ningún archivo de video en este torrent."
+                    loadingStatus = null
+                    return@LaunchedEffect
+                }
 
-            if (targetFile == null || targetFile.length <= 0) {
-                errorMessage = "No se encontró ningún archivo de video en este torrent."
-                loadingStatus = null
-                return@LaunchedEffect
-            }
+                loadingStatus = "Preparando streaming: ${targetFile.fileName}..."
+                session.prioritizeSingleFile(targetFile)
+                val handle = targetFile.createHandle().apply {
+                    resume(FilePriority.HIGH)
+                }
+                createdHandle = handle
 
-            loadingStatus = "Preparando streaming: ${targetFile.fileName}..."
-            session.prioritizeSingleFile(targetFile)
-            val handle = targetFile.createHandle().apply {
-                resume(FilePriority.HIGH)
-            }
-
-            val mediaData = TorrentMediaData(
-                handle = handle,
-                onClose = {
-                    coroutineScope.launch(NonCancellable) {
-                        runCatching { handle.close() }
+                val mediaData = TorrentMediaData(
+                    handle = handle,
+                    onClose = {
+                        coroutineScope.launch(NonCancellable) {
+                            runCatching { handle.close() }
+                            runCatching { session.closeIfNotInUse() }
+                        }
+                    }
+                )
+                currentMediaData = mediaData
+                sessionTransferredToMediaData = true
+            } finally {
+                if (!sessionTransferredToMediaData) {
+                    withContext(NonCancellable) {
+                        runCatching { createdHandle?.close() }
                         runCatching { session.closeIfNotInUse() }
                     }
                 }
-            )
-            currentMediaData = mediaData
+            }
 
             runCatching {
                 val exactSaveDir = downloader.getSaveDirForTorrent(encodedInfo).absolutePath
@@ -920,8 +972,7 @@ fun VideoPlayerScreen(
             chapters = { emptyList() },
             onPreview = {},
             onPreviewFinished = { targetMs ->
-                exoPlayer?.seekTo(targetMs)
-                player.seekTo(targetMs)
+                seekToEffective(targetMs)
             },
         )
     }
@@ -988,6 +1039,18 @@ fun VideoPlayerScreen(
 
     var showSettingsSheet by remember { mutableStateOf(false) }
 
+    val renderProgressSlider: @Composable (Modifier) -> Unit = { sliderModifier ->
+        MediaProgressSlider(
+            state = progressSliderState,
+            cacheProgressInfoFlow = { cacheProgressInfo },
+            showPreviewTimeTextOnThumb = isFullscreen,
+            framePreview = null,
+            showFramePreviewInPopup = isFullscreen,
+            touchSeekState = touchSeekState,
+            modifier = sliderModifier,
+        )
+    }
+
     AniTheme(darkModeOverride = DarkMode.DARK) {
         Box(modifier = Modifier.fillMaxSize()) {
             VideoScaffold(
@@ -1046,15 +1109,11 @@ fun VideoPlayerScreen(
                 },
                 gestureHost = {
                     val videoPropertiesState by player.mediaProperties.collectAsState(null)
-                    val effectiveDuration = if (exoDuration > 0L) exoDuration else (videoPropertiesState?.durationMillis ?: 0L)
                     val swipeSeekerState = rememberSwipeSeekerState(
                         screenWidthPx = constraints.maxWidth,
                         swipeSeekerConfig = swipeSeekerConfig,
                     ) { offsetSeconds ->
-                        val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
-                        val target = (current + offsetSeconds * 1000L).coerceIn(0L, if (effectiveDuration > 0L) effectiveDuration else Long.MAX_VALUE)
-                        exoPlayer?.seekTo(target)
-                        player.skip(offsetSeconds * 1000L)
+                        skipEffective(offsetSeconds * 1000L)
                     }
 
                     val enableSwipeToSeek by remember {
@@ -1177,15 +1236,7 @@ fun VideoPlayerScreen(
                                     }
 
                                     Surface(
-                                        onClick = {
-                                            val current = if (exoPosition > 0L) exoPosition else player.currentPositionMillis.value
-                                            val target = (current + 85_000L).coerceIn(
-                                                0L,
-                                                if (exoDuration > 0L) exoDuration else Long.MAX_VALUE
-                                            )
-                                            exoPlayer?.seekTo(target)
-                                            player.skip(85_000L)
-                                        },
+                                        onClick = { skipEffective(85_000L) },
                                         color = Color.White.copy(alpha = 0.16f),
                                         shape = RoundedCornerShape(50),
                                     ) {
@@ -1212,16 +1263,12 @@ fun VideoPlayerScreen(
                             }
                         }
 
-                        MediaProgressSlider(
-                            state = progressSliderState,
-                            cacheProgressInfoFlow = { cacheProgressInfo },
-                            showPreviewTimeTextOnThumb = isFullscreen,
-                            framePreview = null,
-                            showFramePreviewInPopup = isFullscreen,
-                            touchSeekState = touchSeekState,
-                        )
+                        renderProgressSlider(Modifier)
                     }
-                }
+                },
+                detachedProgressSlider = {
+                    renderProgressSlider(Modifier.padding(horizontal = 12.dp))
+                },
             )
 
             // Panel compacto de ajustes del reproductor (Velocidad, Pantalla, Pistas, Estadísticas)
@@ -1566,18 +1613,8 @@ private fun findMatchingEpisodeFile(
 
     val targets = listOfNotNull(episodeNumber, absoluteEpisodeNumber).distinct()
     for (ep in targets) {
-        val patterns = listOf(
-            Regex("""(?i)[sS]\d+[eE]0*${ep}\b"""),
-            Regex("""(?i)\b(?:ep|episode|cap|capitulo)\.?\s*0*${ep}\b"""),
-            Regex("""(?i)[eE]0*${ep}\b"""),
-            Regex("""[\[\(-]\s*0*${ep}\s*[\]\)-]"""),
-            Regex("""(?:\s|_)0*${ep}(?:\s|_|\.)"""),
-            Regex("""\b0*${ep}\b""")
-        )
-        for (pattern in patterns) {
-            val matched = files.firstOrNull { pattern.containsMatchIn(it.fileName) }
-            if (matched != null) return matched
-        }
+        val matched = EpisodeNumberMatcher.findBestMatch(files, ep) { it.fileName }
+        if (matched != null) return matched
     }
     return null
 }

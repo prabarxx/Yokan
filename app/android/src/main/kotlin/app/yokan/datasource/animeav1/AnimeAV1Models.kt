@@ -37,6 +37,17 @@ data class AnimeAV1Source(
 
     val langTag: String get() = if (isDub) "LAT" else "SUB"
 
+    val canonicalServerName: String get() = when {
+        isUpn -> "UPNShare"
+        isMp4Upload -> "MP4Upload"
+        server.equals("YourUpload", ignoreCase = true) -> "YourUpload"
+        isVoe -> "Voe"
+        server.equals("Filemoon", ignoreCase = true) || embedUrl.contains("filemoon", ignoreCase = true) -> "Filemoon"
+        isVidHide -> "VidHide"
+        isStreamTape -> "StreamTape"
+        else -> server
+    }
+
     val displayName: String get() = when {
         isUpn -> "AnimeAV1 [$langTag] (UPN - HLS Directo)"
         isMp4Upload -> "AnimeAV1 [$langTag] (MP4Upload - 1080p)"

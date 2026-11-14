@@ -356,6 +356,8 @@ class AnimeAV1Client(
         resolvedStreamCache[source.embedUrl]?.let { return@withContext Result.success(it) }
 
         runSuspendCatching {
+            val resolvedServerName = source.server.ifBlank { source.canonicalServerName }
+            var upnProbe: Triple<String, String, Map<String, String>>? = null
             val webStream = when {
                 source.isUpn -> {
                     val hash = Regex("""#([a-zA-Z0-9_-]+)""").find(source.embedUrl)?.groupValues?.get(1)
@@ -409,26 +411,24 @@ class AnimeAV1Client(
                     val (kind, rawUrl) = ordered.first()
                     val streamUrl = appendQueryParams(rawUrl, tokenParams)
 
-                    val webStream = WebStreamSource(
+                    val headers = mapOf(
+                        "Referer" to "$UNS_BIO_BASE/",
+                        "Origin" to UNS_BIO_BASE,
+                        "User-Agent" to DEFAULT_USER_AGENT,
+                        "Accept" to "*/*",
+                    )
+                    upnProbe = Triple(kind, streamUrl, headers)
+
+                    WebStreamSource(
                         title = source.displayName,
-                        serverName = "UPNShare",
+                        serverName = resolvedServerName,
                         streamUrl = streamUrl,
-                        headers = mapOf(
-                            "Referer" to "$UNS_BIO_BASE/",
-                            "Origin" to UNS_BIO_BASE,
-                            "User-Agent" to DEFAULT_USER_AGENT,
-                            "Accept" to "*/*",
-                        ),
+                        headers = headers,
                         quality = "1080p",
                         isHls = true,
                         isDub = source.isDub,
                         queryParams = tokenParams,
                     )
-
-                    // Sonda en segundo plano: valida la URL y guarda el veredicto para la próxima
-                    // resolución (así no se vuelve a elegir una URL caída).
-                    probeUrlHealth(source.embedUrl, kind, streamUrl, webStream.headers)
-                    webStream
                 }
 
                 source.isMp4Upload -> {
@@ -445,7 +445,7 @@ class AnimeAV1Client(
 
                     WebStreamSource(
                         title = source.displayName,
-                        serverName = "MP4Upload",
+                        serverName = resolvedServerName,
                         streamUrl = mp4Match,
                         headers = mapOf(
                             "Referer" to "https://www.mp4upload.com/",
@@ -468,7 +468,7 @@ class AnimeAV1Client(
 
                     WebStreamSource(
                         title = source.displayName,
-                        serverName = "YourUpload",
+                        serverName = resolvedServerName,
                         streamUrl = mp4Match,
                         headers = mapOf(
                             "Referer" to source.embedUrl,
@@ -489,6 +489,10 @@ class AnimeAV1Client(
                 else -> throw UnsupportedOperationException("Servidor web sin extractor directo soportado: ${source.server}")
             }
             resolvedStreamCache[source.embedUrl] = webStream
+            // Sonda en segundo plano tras guardar en caché para poder invalidarla si el stream está caído.
+            upnProbe?.let { (kind, streamUrl, headers) ->
+                probeUrlHealth(source.embedUrl, kind, streamUrl, headers)
+            }
             webStream
         }
     }
@@ -529,7 +533,7 @@ class AnimeAV1Client(
         val originDomain = Regex("""^(https?://[^/]+)""").find(currentUrl)?.groupValues?.get(1) ?: "https://voe.sx"
         return WebStreamSource(
             title = source.displayName,
-            serverName = "Voe",
+            serverName = source.server.ifBlank { source.canonicalServerName },
             streamUrl = streamUrl.replace("\\/", "/"),
             headers = mapOf(
                 "Referer" to "$originDomain/",
@@ -558,7 +562,7 @@ class AnimeAV1Client(
         val originDomain = Regex("""^(https?://[^/]+)""").find(source.embedUrl)?.groupValues?.get(1) ?: BASE_URL
         return WebStreamSource(
             title = source.displayName,
-            serverName = source.server,
+            serverName = source.server.ifBlank { source.canonicalServerName },
             streamUrl = m3u8Match.replace("\\/", "/"),
             headers = mapOf(
                 "Referer" to "$originDomain/",
@@ -598,7 +602,7 @@ class AnimeAV1Client(
 
         return WebStreamSource(
             title = source.displayName,
-            serverName = "StreamTape",
+            serverName = source.server.ifBlank { source.canonicalServerName },
             streamUrl = finalUrl,
             headers = mapOf(
                 "Referer" to source.embedUrl,
@@ -698,6 +702,7 @@ class AnimeAV1Client(
             val alive = verifyStreamUrlAlive(url, headers)
             urlHealthCache[key] = alive
             if (!alive) {
+                resolvedStreamCache.removeIf { it.streamUrl == url }
                 logger.warn("URL de stream marcada como caída ($kind): $url")
             }
         }
@@ -791,7 +796,6 @@ class AnimeAV1Client(
                     }
                     pending = pending.filterNot { it.first == index }
                     if (stream == null) continue
-                    if (chosen != null) continue
                     chosen = stream
 
                     // Ventana de gracia: si queda algún servidor de MAYOR prioridad sin responder,
@@ -809,6 +813,7 @@ class AnimeAV1Client(
                             if (graceStream != null) chosen = graceStream
                         }
                     }
+                    break
                 }
                 chosen
             } finally {
@@ -838,7 +843,12 @@ class AnimeAV1Client(
             val slug = resolveSlug(romajiTitle, englishTitle)
             val sources = getEpisodeSources(slug, episodeNumber)
             val candidates = sources.filter { it.isDub == preferDub }.ifEmpty { sources }
-                .filter { src -> triedServers.none { it.equals(src.server, ignoreCase = true) } }
+                .filter { src ->
+                    triedServers.none { tried ->
+                        tried.equals(src.server, ignoreCase = true) ||
+                            tried.equals(src.canonicalServerName, ignoreCase = true)
+                    }
+                }
             // En paralelo: antes se probaban uno a uno, encadenando una petición HTTP por servidor.
             val stream = resolveFirstSuccessful(candidates)
             if (stream != null) {
