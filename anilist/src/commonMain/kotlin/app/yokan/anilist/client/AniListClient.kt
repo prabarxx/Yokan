@@ -185,11 +185,43 @@ class AniListClient(
                     averageScore
                     genres
                     status
+                    season
+                    seasonYear
+                    format
+                    duration
+                    source
+                    popularity
+                    favourites
+                    studios(isMain: true) {
+                      nodes {
+                        name
+                      }
+                    }
                     nextAiringEpisode {
                       episode
                       airingAt
                     }
                     synonyms
+                    recommendations(sort: RATING_DESC, perPage: 10) {
+                      nodes {
+                        mediaRecommendation {
+                          id
+                          type
+                          format
+                          episodes
+                          seasonYear
+                          title {
+                            romaji
+                            english
+                            native
+                          }
+                          coverImage {
+                            large
+                            medium
+                          }
+                        }
+                      }
+                    }
                     relations {
                       edges {
                         relationType
@@ -317,6 +349,16 @@ class AniListClient(
 
         val genres = obj["genres"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
         val synonyms = obj["synonyms"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val season = obj["season"]?.jsonPrimitive?.contentOrNull
+        val seasonYear = obj["seasonYear"]?.jsonPrimitive?.intOrNull
+        val format = obj["format"]?.jsonPrimitive?.contentOrNull
+        val duration = obj["duration"]?.jsonPrimitive?.intOrNull
+        val source = obj["source"]?.jsonPrimitive?.contentOrNull
+        val popularity = obj["popularity"]?.jsonPrimitive?.intOrNull
+        val favourites = obj["favourites"]?.jsonPrimitive?.intOrNull
+        val studios = obj["studios"]?.jsonObject?.get("nodes")?.jsonArray
+            ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
+            ?: emptyList()
 
         var previousEpisodes: Int? = null
         var currentRelNode: kotlinx.serialization.json.JsonObject? = obj
@@ -405,6 +447,36 @@ class AniListClient(
             )
         } ?: emptyList()
 
+        val recommendations = obj["recommendations"]?.jsonObject?.get("nodes")?.jsonArray?.mapNotNull { nodeElem ->
+            val recObj = (nodeElem.jsonObject["mediaRecommendation"] as? kotlinx.serialization.json.JsonObject)
+                ?: return@mapNotNull null
+            val recType = recObj["type"]?.jsonPrimitive?.contentOrNull
+            if (recType != null && recType != "ANIME") return@mapNotNull null
+            val recId = recObj["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val recTitleObj = recObj["title"]?.jsonObject
+            val recTitle = AniListTitle(
+                romaji = recTitleObj?.get("romaji")?.jsonPrimitive?.contentOrNull.orEmpty(),
+                english = recTitleObj?.get("english")?.jsonPrimitive?.contentOrNull,
+                native = recTitleObj?.get("native")?.jsonPrimitive?.contentOrNull,
+            )
+            val recCoverObj = recObj["coverImage"]?.jsonObject
+            val recCover = if (recCoverObj != null) {
+                AniListCoverImage(
+                    large = recCoverObj["large"]?.jsonPrimitive?.contentOrNull,
+                    medium = recCoverObj["medium"]?.jsonPrimitive?.contentOrNull,
+                )
+            } else null
+            AniListRelation(
+                id = recId,
+                relationType = "RECOMMENDATION",
+                title = recTitle,
+                coverImage = recCover,
+                format = recObj["format"]?.jsonPrimitive?.contentOrNull,
+                episodes = recObj["episodes"]?.jsonPrimitive?.intOrNull,
+                seasonYear = recObj["seasonYear"]?.jsonPrimitive?.intOrNull,
+            )
+        } ?: emptyList()
+
         return AniListMedia(
             id = id,
             title = title,
@@ -421,6 +493,15 @@ class AniListClient(
             nextAiringEpisode = nextAiringEpisode,
             nextAiringAt = nextAiringAt,
             relations = sortedRelations,
+            season = season,
+            seasonYear = seasonYear,
+            format = format,
+            duration = duration,
+            source = source,
+            popularity = popularity,
+            favourites = favourites,
+            studios = studios,
+            recommendations = recommendations,
         )
     }
 }

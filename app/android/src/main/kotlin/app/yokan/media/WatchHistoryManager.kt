@@ -244,6 +244,19 @@ class WatchHistoryManager private constructor(context: Context) {
         if (episode in current) return
         val updated = _watched.value + (animeId to (current + episode))
         _watched.value = updated
+        persistWatched(updated)
+    }
+
+    /** Alterna manualmente el estado "visto" de un episodio (pulsación larga en la lista de episodios). */
+    fun toggleEpisodeWatched(animeId: Int, episode: Int) {
+        val current = _watched.value[animeId].orEmpty()
+        val nextSet = if (episode in current) current - episode else current + episode
+        val updated = _watched.value + (animeId to nextSet)
+        _watched.value = updated
+        persistWatched(updated)
+    }
+
+    private fun persistWatched(updated: Map<Int, Set<Int>>) {
         ioScope.launch {
             runCatching {
                 val obj = JSONObject()

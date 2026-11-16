@@ -5,21 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,34 +20,29 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.platform.LocalContext
 import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
 import app.yokan.datasource.animeav1.AnimeAV1Client
-import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
+import app.yokan.media.WatchHistoryManager
 import app.yokan.ui.screens.AnimeDetailsScreen
 import app.yokan.ui.screens.CacheManagementScreen
+import app.yokan.ui.screens.EpisodeScreen
 import app.yokan.ui.screens.HomeScreen
-import app.yokan.ui.screens.TorrentSelectionModal
 import app.yokan.ui.screens.VideoPlayerScreen
 import app.yokan.ui.state.HomeCache
-import app.yokan.media.WatchHistoryManager
-import androidx.compose.ui.platform.LocalContext
 import io.ktor.client.HttpClient
-import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuite
 import me.him188.ani.app.ui.adaptive.navigation.AniNavigationSuiteLayout
+import me.him188.ani.app.ui.foundation.ImageViewer
+import me.him188.ani.app.ui.foundation.LocalImageViewerHandler
 import me.him188.ani.app.ui.foundation.LocalSketch
 import me.him188.ani.app.ui.foundation.rememberAniSketchInstance
 import me.him188.ani.utils.ktor.asScopedHttpClient
@@ -94,33 +82,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Tiempo máximo de intento automático web antes de ofrecer el selector manual
-private const val WEB_RESOLVE_TIMEOUT_MS = 15_000L
-
 private sealed interface Screen {
     data object Home : Screen
     data object Cache : Screen
     data class Details(val anime: AniListMedia, val previousScreen: Screen? = null) : Screen
-    data class Player(
-        val torrent: NyaaTorrent? = null,
-        val webStream: WebStreamSource? = null,
-        val anime: AniListMedia? = null,
-        val episode: Int? = null,
-        val initialPositionMillis: Long = 0L,
+    data class Episode(
+        val anime: AniListMedia,
+        val episode: Int,
+        val previousScreen: Screen,
+    ) : Screen
+    data class StandaloneTorrent(
+        val torrent: NyaaTorrent,
         val previousScreen: Screen,
     ) : Screen
 }
-
-private data class TorrentModalState(
-    val anime: AniListMedia,
-    val episode: Int,
-    val notice: String? = null,
-)
-
-private data class ResolvingEpisodeState(
-    val anime: AniListMedia,
-    val episode: Int,
-)
 
 @Composable
 private fun YokanApp(
@@ -131,250 +106,69 @@ private fun YokanApp(
     val context = LocalContext.current
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
     val preferDub by watchHistoryManager.preferDub.collectAsState()
+    val imageViewer = LocalImageViewerHandler.current
 
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
-    var torrentModalState by remember { mutableStateOf<TorrentModalState?>(null) }
-    var resolvingEpisodeState by remember { mutableStateOf<ResolvingEpisodeState?>(null) }
     var selectedNavTab by remember { mutableStateOf(0) }
 
-    // Auto-Resolver Web Prioritario:
-    // Intenta reproducir automáticamente desde servidores web (AnimeAV1) en el idioma preferido (SUB o LAT).
-    // Si no está disponible o tarda demasiado, abre el selector manual para que el usuario elija fuente web o torrent.
-    LaunchedEffect(resolvingEpisodeState) {
-        val state = resolvingEpisodeState ?: return@LaunchedEffect
-        // Si se pide desde el reproductor (siguiente episodio), "atrás" debe volver a donde estaba antes
-        val prev = (currentScreen as? Screen.Player)?.previousScreen ?: currentScreen
-
-        // Look up saved progress for "continuar viendo"
-        val savedProgress = watchHistoryManager.getProgress(state.anime.id)
-        val savedPositionMillis = if (savedProgress?.episode == state.episode &&
-            savedProgress.progressFraction < 0.92f) {
-            savedProgress.positionMillis
-        } else 0L
-
-        val webStreamResult = withTimeoutOrNull(WEB_RESOLVE_TIMEOUT_MS) {
-            animeAV1Client.resolveBestStream(
-                romajiTitle = state.anime.title.romaji,
-                englishTitle = state.anime.title.english,
-                episodeNumber = state.episode,
-                preferDub = preferDub,
-            )
-        }
-
-        if (webStreamResult == null) {
-            resolvingEpisodeState = null
-            torrentModalState = TorrentModalState(
-                state.anime,
-                state.episode,
-                notice = "La búsqueda web tardó demasiado. Elige un servidor o torrent manualmente.",
-            )
-            return@LaunchedEffect
-        }
-
-        val bestWebStream = webStreamResult.getOrNull()
-        resolvingEpisodeState = null
-        if (bestWebStream != null) {
-            currentScreen = Screen.Player(
-                webStream = bestWebStream,
-                anime = state.anime,
-                episode = state.episode,
-                initialPositionMillis = savedPositionMillis,
-                previousScreen = prev,
-            )
-        } else {
-            torrentModalState = TorrentModalState(
-                state.anime,
-                state.episode,
-                notice = "No se encontró stream web automático. Elige un servidor o torrent manualmente.",
-            )
-        }
+    BackHandler(enabled = imageViewer.viewing.value) {
+        imageViewer.clear()
     }
 
-    BackHandler(enabled = currentScreen !is Screen.Home || torrentModalState != null || resolvingEpisodeState != null || (currentScreen is Screen.Home && (selectedNavTab == 1 || HomeCache.isSearching))) {
-        if (resolvingEpisodeState != null) {
-            resolvingEpisodeState = null
-        } else if (torrentModalState != null) {
-            torrentModalState = null
-        } else {
-            when (val screen = currentScreen) {
-                is Screen.Home -> {
-                    if (selectedNavTab == 1 || HomeCache.isSearching) {
-                        selectedNavTab = 0
-                        HomeCache.isSearching = false
-                    }
-                }
-                is Screen.Cache -> {
+    BackHandler(
+        enabled = !imageViewer.viewing.value && (
+            currentScreen !is Screen.Home ||
+                (currentScreen is Screen.Home && (selectedNavTab == 1 || HomeCache.isSearching))
+            ),
+    ) {
+        when (val screen = currentScreen) {
+            is Screen.Home -> {
+                if (selectedNavTab == 1 || HomeCache.isSearching) {
                     selectedNavTab = 0
-                    currentScreen = Screen.Home
+                    HomeCache.isSearching = false
                 }
-                is Screen.Details -> currentScreen = screen.previousScreen ?: Screen.Home
-                is Screen.Player -> currentScreen = screen.previousScreen
             }
+            is Screen.Cache -> {
+                selectedNavTab = 0
+                currentScreen = Screen.Home
+            }
+            is Screen.Details -> currentScreen = screen.previousScreen ?: Screen.Home
+            is Screen.Episode -> currentScreen = screen.previousScreen
+            is Screen.StandaloneTorrent -> currentScreen = screen.previousScreen
         }
     }
 
-    if (currentScreen is Screen.Player) {
-        val playerScreen = currentScreen as Screen.Player
-        var hasBothLanguages by remember(playerScreen.anime?.id, playerScreen.episode) {
-            mutableStateOf(false)
-        }
-        // Precarga el episodio siguiente mientras se ve el actual y detecta si el episodio actual tiene SUB y LAT
-        LaunchedEffect(playerScreen.anime?.id, playerScreen.episode, preferDub) {
-            val anime = playerScreen.anime ?: return@LaunchedEffect
-            val ep = playerScreen.episode ?: return@LaunchedEffect
-            val (hasSub, hasDub) = animeAV1Client.getAvailableLanguages(
-                romajiTitle = anime.title.romaji,
-                englishTitle = anime.title.english,
-                episodeNumber = ep,
-            )
-            hasBothLanguages = hasSub && hasDub
-            animeAV1Client.prefetchEpisode(
-                romajiTitle = anime.title.romaji,
-                englishTitle = anime.title.english,
-                episodeNumber = ep + 1,
-                preferDub = preferDub,
-            )
-        }
-        // key: recrea el reproductor limpio al cambiar de episodio o de fuente
-        key(
-            playerScreen.anime?.id,
-            playerScreen.episode,
-            playerScreen.webStream?.streamUrl,
-            playerScreen.torrent?.magnetUrl,
-            playerScreen.torrent?.torrentUrl,
-        ) {
-        VideoPlayerScreen(
-            torrent = playerScreen.torrent,
-            webStream = playerScreen.webStream,
-            episodeNumber = playerScreen.episode,
-            absoluteEpisodeNumber = playerScreen.anime?.let {
-                playerScreen.episode?.let { ep -> it.calculateAbsoluteEpisode(ep).takeIf { abs -> abs != ep } }
-            },
-            initialPositionMillis = playerScreen.initialPositionMillis,
-            animeForHistory = playerScreen.anime,
-            hasBothLanguages = hasBothLanguages,
-            onToggleAudioLanguage = if (playerScreen.anime != null && playerScreen.episode != null) {
-                { targetDub ->
-                    val resolved = animeAV1Client.resolveBestStream(
-                        romajiTitle = playerScreen.anime.title.romaji,
-                        englishTitle = playerScreen.anime.title.english,
-                        episodeNumber = playerScreen.episode,
-                        preferDub = targetDub,
-                    ).getOrNull()
-                    if (resolved != null && resolved.isDub == targetDub) {
-                        watchHistoryManager.setPreferDub(targetDub)
-                        resolved
-                    } else {
-                        null
-                    }
-                }
-            } else null,
-            onChangeSource = if (playerScreen.anime != null && playerScreen.episode != null) {
-                {
-                    torrentModalState = TorrentModalState(playerScreen.anime, playerScreen.episode)
-                }
-            } else null,
-            onNextEpisode = if (
-                playerScreen.anime != null && playerScreen.episode != null &&
-                (playerScreen.anime.effectiveEpisodesCount == 0 ||
-                    playerScreen.episode < playerScreen.anime.effectiveEpisodesCount) &&
-                // No ofrecer un episodio que aún no se emitió
-                (playerScreen.anime.latestAiredEpisode == 0 ||
-                    playerScreen.episode < playerScreen.anime.latestAiredEpisode)
-            ) {
-                {
-                    resolvingEpisodeState =
-                        ResolvingEpisodeState(playerScreen.anime, playerScreen.episode + 1)
-                }
-            } else null,
-            onResolveNextWebSource = if (playerScreen.anime != null && playerScreen.episode != null) {
-                { failed, tried ->
-                    animeAV1Client.resolveNextStream(
-                        romajiTitle = playerScreen.anime.title.romaji,
-                        englishTitle = playerScreen.anime.title.english,
-                        episodeNumber = playerScreen.episode,
-                        triedServers = tried,
-                        failed = failed,
-                        preferDub = failed.isDub,
-                    )
-                }
-            } else null,
-            onBack = {
-                currentScreen = playerScreen.previousScreen
-            },
-        )
-        }
-    } else {
-        AniNavigationSuiteLayout(
-            navigationSuite = {
-                AniNavigationSuite {
-                    item(
-                        selected = selectedNavTab == 0 && currentScreen is Screen.Home && !HomeCache.isSearching,
-                        onClick = {
-                            selectedNavTab = 0
-                            HomeCache.isSearching = false
-                            currentScreen = Screen.Home
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (val screen = currentScreen) {
+            is Screen.Episode -> {
+                key(screen.anime.id) {
+                    EpisodeScreen(
+                        initialAnime = screen.anime,
+                        initialEpisode = screen.episode,
+                        aniListClient = aniListClient,
+                        nyaaSearchEngine = nyaaSearchEngine,
+                        animeAV1Client = animeAV1Client,
+                        onNavigateAnime = { relatedAnime ->
+                            currentScreen = Screen.Details(anime = relatedAnime, previousScreen = screen)
                         },
-                        icon = { Icon(Icons.Rounded.Explore, contentDescription = "Explorar") },
-                        label = { Text("Explorar") },
-                    )
-                    item(
-                        selected = (selectedNavTab == 1 && currentScreen is Screen.Home) || (currentScreen is Screen.Home && HomeCache.isSearching),
-                        onClick = {
-                            selectedNavTab = 1
-                            HomeCache.isSearching = true
-                            currentScreen = Screen.Home
+                        onBack = {
+                            currentScreen = screen.previousScreen
                         },
-                        icon = { Icon(Icons.Rounded.Search, contentDescription = "Buscar") },
-                        label = { Text("Buscar") },
-                    )
-                    item(
-                        selected = selectedNavTab == 2 && currentScreen is Screen.Cache,
-                        onClick = {
-                            selectedNavTab = 2
-                            currentScreen = Screen.Cache
-                        },
-                        icon = { Icon(Icons.Rounded.DownloadDone, contentDescription = "Caché") },
-                        label = { Text("Caché") },
                     )
                 }
             }
-        ) {
-            when (val screen = currentScreen) {
-                is Screen.Home -> {
-                    HomeScreen(
-                        aniListClient = aniListClient,
-                        onAnimeClick = { anime ->
-                            currentScreen = Screen.Details(anime = anime, previousScreen = Screen.Home)
-                        },
-                        onEpisodeClick = { anime, episode ->
-                            resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
-                        },
-                        isSearchTab = selectedNavTab == 1 || HomeCache.isSearching,
-                        onSearchModeChange = { active ->
-                            selectedNavTab = if (active) 1 else 0
-                        },
-                    )
-                }
-                is Screen.Cache -> {
-                    CacheManagementScreen(
-                        onPlayTorrent = { torrent ->
-                            currentScreen = Screen.Player(
-                                torrent = torrent,
-                                webStream = null,
-                                anime = null,
-                                episode = null,
-                                previousScreen = Screen.Cache,
-                            )
-                        }
-                    )
-                }
-                is Screen.Details -> {
+
+            is Screen.StandaloneTorrent -> {
+                VideoPlayerScreen(
+                    torrent = screen.torrent,
+                    isFullscreen = true,
+                    onBack = { currentScreen = screen.previousScreen },
+                )
+            }
+
+            is Screen.Details -> {
+                key(screen.anime.id) {
                     LaunchedEffect(screen.anime.id, preferDub) {
-                        // Precarga en segundo plano mientras el usuario visualiza los detalles del anime.
-                        // Se precarga el episodio que realmente va a reproducir (el de "Continuar
-                        // viendo"); antes se precargaba siempre el 1, así que la precarga no servía
-                        // para nada cuando el usuario pulsaba otro episodio.
                         val episodeToPrefetch = watchHistoryManager.getProgress(screen.anime.id)
                             ?.episode
                             ?.takeIf { it > 0 }
@@ -395,105 +189,93 @@ private fun YokanApp(
                             currentScreen = Screen.Details(anime = relatedAnime, previousScreen = screen)
                         },
                         onEpisodeClick = { anime, episode ->
-                            resolvingEpisodeState = ResolvingEpisodeState(anime, episode)
+                            currentScreen = Screen.Episode(
+                                anime = anime,
+                                episode = episode,
+                                previousScreen = screen,
+                            )
                         },
                         onBack = {
                             currentScreen = screen.previousScreen ?: Screen.Home
                         },
                     )
                 }
-                is Screen.Player -> Unit
             }
-        }
-    }
 
-    // Modal de resolución automática en progreso
-    resolvingEpisodeState?.let { state ->
-        Dialog(onDismissRequest = { resolvingEpisodeState = null }) {
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(
-                        text = "Buscando la mejor fuente...",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = "Episodio ${state.episode} • ${state.anime.title.displayTitle}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            val anime = state.anime
-                            val ep = state.episode
-                            resolvingEpisodeState = null
-                            torrentModalState = TorrentModalState(anime, ep)
+            is Screen.Home, is Screen.Cache -> {
+                AniNavigationSuiteLayout(
+                    navigationSuite = {
+                        AniNavigationSuite {
+                            item(
+                                selected = selectedNavTab == 0 && currentScreen is Screen.Home && !HomeCache.isSearching,
+                                onClick = {
+                                    selectedNavTab = 0
+                                    HomeCache.isSearching = false
+                                    currentScreen = Screen.Home
+                                },
+                                icon = { Icon(Icons.Rounded.Explore, contentDescription = "Explorar") },
+                                label = { Text("Explorar") },
+                            )
+                            item(
+                                selected = (selectedNavTab == 1 && currentScreen is Screen.Home) || (currentScreen is Screen.Home && HomeCache.isSearching),
+                                onClick = {
+                                    selectedNavTab = 1
+                                    HomeCache.isSearching = true
+                                    currentScreen = Screen.Home
+                                },
+                                icon = { Icon(Icons.Rounded.Search, contentDescription = "Buscar") },
+                                label = { Text("Buscar") },
+                            )
+                            item(
+                                selected = selectedNavTab == 2 && currentScreen is Screen.Cache,
+                                onClick = {
+                                    selectedNavTab = 2
+                                    currentScreen = Screen.Cache
+                                },
+                                icon = { Icon(Icons.Rounded.DownloadDone, contentDescription = "Caché") },
+                                label = { Text("Caché") },
+                            )
                         }
-                    ) {
-                        Text("Elegir fuente manualmente")
+                    }
+                ) {
+                    when (screen) {
+                        is Screen.Home -> {
+                            HomeScreen(
+                                aniListClient = aniListClient,
+                                onAnimeClick = { anime ->
+                                    currentScreen = Screen.Details(anime = anime, previousScreen = Screen.Home)
+                                },
+                                onEpisodeClick = { anime, episode ->
+                                    currentScreen = Screen.Episode(
+                                        anime = anime,
+                                        episode = episode,
+                                        previousScreen = Screen.Home,
+                                    )
+                                },
+                                isSearchTab = selectedNavTab == 1 || HomeCache.isSearching,
+                                onSearchModeChange = { active ->
+                                    selectedNavTab = if (active) 1 else 0
+                                },
+                            )
+                        }
+
+                        is Screen.Cache -> {
+                            CacheManagementScreen(
+                                onPlayTorrent = { torrent ->
+                                    currentScreen = Screen.StandaloneTorrent(
+                                        torrent = torrent,
+                                        previousScreen = Screen.Cache,
+                                    )
+                                }
+                            )
+                        }
+
+                        else -> Unit
                     }
                 }
             }
         }
-    }
 
-    torrentModalState?.let { modal ->
-        val savedProgress = watchHistoryManager.getProgress(modal.anime.id)
-        val savedPositionMillis = if (savedProgress?.episode == modal.episode &&
-            savedProgress.progressFraction < 0.92f) {
-            savedProgress.positionMillis
-        } else 0L
-
-        TorrentSelectionModal(
-            anime = modal.anime,
-            episodeNumber = modal.episode,
-            notice = modal.notice,
-            searchEngine = nyaaSearchEngine,
-            animeAV1Client = animeAV1Client,
-            onTorrentSelect = { torrent ->
-                val prev = if (currentScreen is Screen.Player) {
-                    (currentScreen as Screen.Player).previousScreen
-                } else {
-                    currentScreen
-                }
-                torrentModalState = null
-                currentScreen = Screen.Player(
-                    torrent = torrent,
-                    webStream = null,
-                    anime = modal.anime,
-                    episode = modal.episode,
-                    initialPositionMillis = savedPositionMillis,
-                    previousScreen = prev,
-                )
-            },
-            onWebStreamSelect = { webStream ->
-                val prev = if (currentScreen is Screen.Player) {
-                    (currentScreen as Screen.Player).previousScreen
-                } else {
-                    currentScreen
-                }
-                torrentModalState = null
-                currentScreen = Screen.Player(
-                    torrent = null,
-                    webStream = webStream,
-                    anime = modal.anime,
-                    episode = modal.episode,
-                    initialPositionMillis = savedPositionMillis,
-                    previousScreen = prev,
-                )
-            },
-            onDismiss = {
-                torrentModalState = null
-            },
-        )
+        ImageViewer(handler = imageViewer) { imageViewer.clear() }
     }
 }

@@ -55,6 +55,8 @@ data class AniListRelation(
             title = title,
             coverImage = coverImage,
             episodes = episodes,
+            format = format,
+            seasonYear = seasonYear,
         )
     }
 
@@ -66,6 +68,7 @@ data class AniListRelation(
             "ALTERNATIVE" -> "Versión alternativa"
             "SIDE_STORY" -> if (format?.uppercase() == "MOVIE") "Película" else "Historia secundaria"
             "SPIN_OFF" -> "Spin-off"
+            "RECOMMENDATION" -> "Recomendado"
             else -> relationType.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }
         }
 }
@@ -87,9 +90,61 @@ data class AniListMedia(
     val nextAiringEpisode: Int? = null,
     val nextAiringAt: Long? = null,
     val relations: List<AniListRelation> = emptyList(),
+    val season: String? = null,
+    val seasonYear: Int? = null,
+    val format: String? = null,
+    val duration: Int? = null,
+    val source: String? = null,
+    val popularity: Int? = null,
+    val favourites: Int? = null,
+    val studios: List<String> = emptyList(),
+    val recommendations: List<AniListRelation> = emptyList(),
 ) {
     val displayScore: String
         get() = averageScore?.let { "$it%" } ?: "N/A"
+
+    val displaySeason: String?
+        get() {
+            val year = seasonYear ?: return null
+            val seasonLabel = when (season?.uppercase()) {
+                "WINTER" -> "Invierno"
+                "SPRING" -> "Primavera"
+                "SUMMER" -> "Verano"
+                "FALL" -> "Otoño"
+                else -> return year.toString()
+            }
+            return "$seasonLabel $year"
+        }
+
+    val displayFormat: String?
+        get() = when (format?.uppercase()) {
+            "TV" -> "Serie TV"
+            "TV_SHORT" -> "TV Corto"
+            "MOVIE" -> "Película"
+            "SPECIAL" -> "Especial"
+            "OVA" -> "OVA"
+            "ONA" -> "ONA"
+            "MUSIC" -> "Música"
+            else -> format
+        }
+
+    val displaySource: String?
+        get() = when (source?.uppercase()) {
+            "ORIGINAL" -> "Original"
+            "MANGA" -> "Manga"
+            "LIGHT_NOVEL" -> "Novela ligera"
+            "VISUAL_NOVEL" -> "Novela visual"
+            "VIDEO_GAME" -> "Videojuego"
+            "OTHER" -> "Otro"
+            "NOVEL" -> "Novela"
+            "DOUJINSHI" -> "Doujinshi"
+            "ANIME" -> "Anime"
+            "WEB_NOVEL" -> "Novela web"
+            "LIVE_ACTION" -> "Live action"
+            "GAME" -> "Juego"
+            "COMIC" -> "Cómic"
+            else -> source
+        }
 
     val cleanDescription: String
         get() {

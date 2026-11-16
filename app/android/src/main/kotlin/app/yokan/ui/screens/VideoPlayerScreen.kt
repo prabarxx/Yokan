@@ -4,6 +4,8 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,9 +25,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.rounded.Close
@@ -112,6 +119,9 @@ import me.him188.ani.app.torrent.api.pieces.PieceState
 import me.him188.ani.app.torrent.api.pieces.forEach
 import me.him188.ani.app.torrent.api.pieces.isEmpty
 import me.him188.ani.app.torrent.api.pieces.sumOf
+import me.him188.ani.app.ui.foundation.TextWithBorder
+import me.him188.ani.app.ui.foundation.animation.AniAnimatedVisibility
+import me.him188.ani.app.ui.foundation.animation.LocalAniMotionScheme
 import me.him188.ani.app.ui.foundation.effects.DarkStatusBarAppearance
 import me.him188.ani.app.ui.foundation.effects.ScreenOnEffect
 import me.him188.ani.app.ui.foundation.icons.AniIcons
@@ -218,11 +228,22 @@ fun VideoPlayerScreen(
     absoluteEpisodeNumber: Int? = null,
     initialPositionMillis: Long = 0L,
     animeForHistory: AniListMedia? = null,
+    episodeTitle: String? = null,
     hasBothLanguages: Boolean = false,
+    isFullscreen: Boolean? = null,
+    onFullscreenChange: ((Boolean) -> Unit)? = null,
+    maintainAspectRatio: Boolean? = null,
+    windowInsets: WindowInsets? = null,
+    externalLoadingStatus: String? = null,
+    externalErrorMessage: String? = null,
+    onOpenEpisodeList: (() -> Unit)? = null,
+    onActiveStreamResolved: ((WebStreamSource) -> Unit)? = null,
     onToggleAudioLanguage: (suspend (targetDub: Boolean) -> WebStreamSource?)? = null,
     onChangeSource: (() -> Unit)? = null,
     onNextEpisode: (() -> Unit)? = null,
     onResolveNextWebSource: (suspend (failed: WebStreamSource, triedServers: Set<String>) -> WebStreamSource?)? = null,
+    rhsSheet: @Composable () -> Unit = {},
+    modifier: Modifier = Modifier,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -232,7 +253,7 @@ fun VideoPlayerScreen(
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var loadingStatus by remember { mutableStateOf<String?>("Cargando...") }
+    var loadingStatus by remember { mutableStateOf<String?>(if (torrent != null || webStream != null) "Cargando..." else null) }
     var currentMediaData by remember { mutableStateOf<TorrentMediaData?>(null) }
     var cacheProgressInfo by remember { mutableStateOf<MediaCacheProgressInfo?>(null) }
     var cachePercentText by remember { mutableStateOf<String?>(null) }
@@ -271,6 +292,20 @@ fun VideoPlayerScreen(
     var resumeAfterFallbackMs by remember { mutableLongStateOf(-1L) }
     val currentResolveNext by rememberUpdatedState(onResolveNextWebSource)
     val currentToggleLanguage by rememberUpdatedState(onToggleAudioLanguage)
+    val currentOnActiveStreamResolved by rememberUpdatedState(onActiveStreamResolved)
+
+    // Sincroniza cambios externos de webStream/torrent sin destruir el reproductor al cambiar de fuente
+    LaunchedEffect(webStream?.streamUrl, torrent?.magnetUrl, torrent?.torrentUrl) {
+        if (torrent == null && webStream != null && webStream.streamUrl != activeWebStream?.streamUrl) {
+            triedWebServers.clear()
+            errorMessage = null
+            activeWebStream = webStream
+        }
+    }
+
+    LaunchedEffect(activeWebStream) {
+        activeWebStream?.let { currentOnActiveStreamResolved?.invoke(it) }
+    }
 
     /** Pasa al siguiente servidor. Devuelve true si inició el cambio (o ya hay uno en curso). */
     fun switchToNextWebSource(reason: String): Boolean {
@@ -394,63 +429,71 @@ fun VideoPlayerScreen(
         }
     }
 
-    var isFullscreen by remember { mutableStateOf(true) }
+    var internalFullscreen by remember { mutableStateOf(animeForHistory == null) }
+    val effectiveFullscreen = isFullscreen ?: internalFullscreen
+    val currentOnFullscreenChange by rememberUpdatedState(onFullscreenChange)
     var isLocked by remember { mutableStateOf(false) }
     var showPlayerStats by remember { mutableStateOf(false) }
 
     val fullscreenState = rememberPlayerFullscreenState(
-        isFullscreen = { isFullscreen },
+        isFullscreen = { effectiveFullscreen },
         onRequest = { requestedFullscreen ->
-            isFullscreen = requestedFullscreen
-            activity?.requestedOrientation = if (requestedFullscreen) {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_USER
+            if (!requestedFullscreen) {
+                isLocked = false
             }
-            val window = activity?.window
-            if (window != null) {
-                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-                if (requestedFullscreen) {
-                    insetsController.systemBarsBehavior =
-                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    insetsController.hide(WindowInsetsCompat.Type.systemBars())
-                } else {
-                    insetsController.show(WindowInsetsCompat.Type.systemBars())
-                    insetsController.systemBarsBehavior =
-                        WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-                }
+            if (currentOnFullscreenChange != null) {
+                currentOnFullscreenChange?.invoke(requestedFullscreen)
+            } else {
+                internalFullscreen = requestedFullscreen
             }
         }
     )
 
-    // Force landscape on start, hide system bars in immersive mode, restore on exit
+    // Sincroniza orientación horizontal / sistema bars exclusivamente con `effectiveFullscreen`
+    LaunchedEffect(effectiveFullscreen, activity) {
+        val act = activity ?: return@LaunchedEffect
+        val window = act.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        if (effectiveFullscreen) {
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            insetsController?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                @Suppress("DEPRECATION")
+                window?.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        } else {
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+            insetsController?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                @Suppress("DEPRECATION")
+                window?.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        }
+    }
+
+    // Configura cutout al montar y restaura orientación / guarda progreso al cerrar el episodio
     DisposableEffect(activity) {
         val window = activity?.window
         val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
         val originalSystemBarsBehavior = insetsController?.systemBarsBehavior
 
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-
-        if (window != null) {
-            insetsController?.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetsController?.hide(WindowInsetsCompat.Type.systemBars())
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val params = window.attributes
-                params.layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                window.attributes = params
-            }
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-                @Suppress("DEPRECATION")
-                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-            }
+        if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val params = window.attributes
+            params.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = params
         }
 
         onDispose {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             if (window != null) {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 insetsController?.show(WindowInsetsCompat.Type.systemBars())
                 insetsController?.systemBarsBehavior =
                     originalSystemBarsBehavior ?: WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
@@ -484,10 +527,11 @@ fun VideoPlayerScreen(
     }
 
     BackHandler {
-        if (isFullscreen) {
+        if (effectiveFullscreen && animeForHistory != null) {
             fullscreenState.request(false)
+        } else {
+            onBack()
         }
-        onBack()
     }
 
     val playWhenReady by remember(player) { player.state.map { it.playWhenReady } }
@@ -771,6 +815,7 @@ fun VideoPlayerScreen(
     LaunchedEffect(torrent?.magnetUrl, torrent?.torrentUrl) {
         val currentTorrent = torrent ?: return@LaunchedEffect
         activeWebStream = null
+        runCatching { exoPlayer?.clearMediaItems() }
         currentMediaData?.let { prev ->
             currentMediaData = null
             runCatching { prev.close() }
@@ -930,8 +975,8 @@ fun VideoPlayerScreen(
     val controllerState = rememberVideoControllerState()
 
     // Ensure system bars (notification/battery bar) stay hidden when player controls auto-hide or during playback
-    LaunchedEffect(controllerState.visibility, isFullscreen) {
-        if (isFullscreen && controllerState.visibility == ControllerVisibility.Invisible) {
+    LaunchedEffect(controllerState.visibility, effectiveFullscreen) {
+        if (effectiveFullscreen && controllerState.visibility == ControllerVisibility.Invisible) {
             val window = activity?.window
             if (window != null) {
                 val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -942,8 +987,8 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(isEffectivelyPlaying, isFullscreen) {
-        if (isFullscreen && isEffectivelyPlaying) {
+    LaunchedEffect(isEffectivelyPlaying, effectiveFullscreen) {
+        if (effectiveFullscreen && isEffectivelyPlaying) {
             val window = activity?.window
             if (window != null) {
                 val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -1039,30 +1084,79 @@ fun VideoPlayerScreen(
 
     var showSettingsSheet by remember { mutableStateOf(false) }
 
+    val resolvedMaintainAspectRatio = maintainAspectRatio ?: !effectiveFullscreen
+    val resolvedWindowInsets = windowInsets ?: if (effectiveFullscreen) {
+        WindowInsets.displayCutout
+    } else {
+        WindowInsets(0)
+    }
+
     val renderProgressSlider: @Composable (Modifier) -> Unit = { sliderModifier ->
         MediaProgressSlider(
             state = progressSliderState,
             cacheProgressInfoFlow = { cacheProgressInfo },
-            showPreviewTimeTextOnThumb = isFullscreen,
+            showPreviewTimeTextOnThumb = effectiveFullscreen,
             framePreview = null,
-            showFramePreviewInPopup = isFullscreen,
+            showFramePreviewInPopup = effectiveFullscreen,
             touchSeekState = touchSeekState,
             modifier = sliderModifier,
         )
     }
 
+    val activeLoadingStatus = loadingStatus
+        ?: if (activeWebStream == null && torrent == null) externalLoadingStatus else null
+    val activeErrorMessage = errorMessage
+        ?: if (activeWebStream == null && torrent == null) externalErrorMessage else null
+
+    val outerModifier = modifier
+        .fillMaxWidth()
+        .background(Color.Black)
+        .then(if (effectiveFullscreen) Modifier.fillMaxSize() else Modifier.statusBarsPadding())
+
     AniTheme(darkModeOverride = DarkMode.DARK) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = outerModifier) {
             VideoScaffold(
-                expanded = isFullscreen,
-                modifier = Modifier.fillMaxSize(),
-                contentWindowInsets = WindowInsets.displayCutout,
-                maintainAspectRatio = false,
+                expanded = effectiveFullscreen,
+                modifier = if (effectiveFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+                contentWindowInsets = resolvedWindowInsets,
+                maintainAspectRatio = resolvedMaintainAspectRatio,
                 controllerState = controllerState,
                 gestureLocked = isLocked,
                 topBar = {
                     PlayerTopBar(
-                        title = {},
+                        title = {
+                            if (effectiveFullscreen && animeForHistory != null) {
+                                Column(horizontalAlignment = Alignment.Start) {
+                                    ProvideTextStyle(MaterialTheme.typography.titleMedium) {
+                                        TextWithBorder(
+                                            animeForHistory.title.displayTitle,
+                                            softWrap = false,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    val epLabel = buildString {
+                                        episodeNumber?.let { append(String.format("%02d", it)) }
+                                        val titleText = episodeTitle?.takeIf { it.isNotBlank() }
+                                            ?: episodeNumber?.let { "Episodio $it" }
+                                        if (!titleText.isNullOrBlank()) {
+                                            if (isNotEmpty()) append("  ")
+                                            append(titleText)
+                                        }
+                                    }
+                                    if (epLabel.isNotBlank()) {
+                                        ProvideTextStyle(MaterialTheme.typography.titleSmall) {
+                                            TextWithBorder(
+                                                epLabel,
+                                                softWrap = false,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        },
                         actions = {
                             if (activeWebStream != null && hasBothLanguages && onToggleAudioLanguage != null) {
                                 val isCurrentlyDub = activeWebStream?.isDub == true
@@ -1081,7 +1175,7 @@ fun VideoPlayerScreen(
                                     )
                                 }
                             }
-                            if (onChangeSource != null) {
+                            if (onChangeSource != null && (effectiveFullscreen || activeErrorMessage != null)) {
                                 IconButton(onClick = onChangeSource) {
                                     Icon(
                                         Icons.Rounded.SwapHoriz,
@@ -1097,7 +1191,8 @@ fun VideoPlayerScreen(
                                     tint = Color.White,
                                 )
                             }
-                        }
+                        },
+                        windowInsets = WindowInsets(0),
                     )
                 },
                 centerOverlay = {},
@@ -1144,7 +1239,7 @@ fun VideoPlayerScreen(
                     )
                 },
                 gestureLock = {
-                    if (isFullscreen) {
+                    if (effectiveFullscreen) {
                         GestureLock(
                             isLocked = isLocked,
                             onClick = { isLocked = !isLocked },
@@ -1157,8 +1252,9 @@ fun VideoPlayerScreen(
                     }
                 },
                 floatingMessage = {
-                    val status = loadingStatus
-                    if (isEffectivelyBuffering || status != null) {
+                    val status = activeLoadingStatus
+                    val showBuffering = (activeWebStream != null || torrent != null) && isEffectivelyBuffering
+                    if (activeErrorMessage == null && (showBuffering || status != null)) {
                         VideoLoadingIndicator(
                             showProgress = true,
                             text = {
@@ -1173,13 +1269,34 @@ fun VideoPlayerScreen(
                         )
                     }
                 },
+                floatingBottomEnd = {
+                    if (!effectiveFullscreen) {
+                        var showFloatingSwitch by remember { mutableStateOf(true) }
+                        LaunchedEffect(Unit) {
+                            delay(5.seconds)
+                            showFloatingSwitch = false
+                        }
+                        AniAnimatedVisibility(
+                            visible = showFloatingSwitch,
+                            enter = fadeIn(snap()),
+                            exit = LocalAniMotionScheme.current.animatedVisibility.standardExit,
+                        ) {
+                            PlayerControllerDefaults.FullscreenIcon(fullscreenState)
+                        }
+                    }
+                },
+                rhsSheet = rhsSheet,
                 bottomBar = {
                     val sliderOnly = controllerState.visibility == ControllerVisibility.InlineSliderOnly
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable(remember { MutableInteractionSource() }, null, onClick = {})
-                            .padding(start = 16.dp, end = 16.dp, bottom = 4.dp),
+                            .padding(
+                                start = if (effectiveFullscreen) 16.dp else 8.dp,
+                                end = if (effectiveFullscreen) 16.dp else 8.dp,
+                                bottom = if (effectiveFullscreen) 4.dp else 2.dp,
+                            ),
                     ) {
                         if (!sliderOnly) {
                             Row(
@@ -1195,7 +1312,7 @@ fun VideoPlayerScreen(
                                         isPlaying = { isEffectivelyPlaying },
                                         onClick = togglePlayPause,
                                     )
-                                    if (onNextEpisode != null) {
+                                    if (effectiveFullscreen && onNextEpisode != null) {
                                         IconButton(onClick = onNextEpisode) {
                                             Icon(
                                                 Icons.Rounded.SkipNext,
@@ -1216,10 +1333,21 @@ fun VideoPlayerScreen(
 
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(if (effectiveFullscreen) 8.dp else 4.dp),
                                 ) {
+                                    if (effectiveFullscreen && onOpenEpisodeList != null) {
+                                        TextButton(
+                                            onClick = onOpenEpisodeList,
+                                            colors = ButtonDefaults.textButtonColors(
+                                                contentColor = Color.White,
+                                            ),
+                                        ) {
+                                            Text("Episodios", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                        }
+                                    }
+
                                     val currentSpeed = playbackSpeedControllerState?.currentSpeed ?: 1.0f
-                                    if (currentSpeed != 1.0f) {
+                                    if (effectiveFullscreen && currentSpeed != 1.0f) {
                                         Surface(
                                             onClick = { showSettingsSheet = true },
                                             color = Color.White.copy(alpha = 0.14f),
@@ -1235,30 +1363,34 @@ fun VideoPlayerScreen(
                                         }
                                     }
 
-                                    Surface(
-                                        onClick = { skipEffective(85_000L) },
-                                        color = Color.White.copy(alpha = 0.16f),
-                                        shape = RoundedCornerShape(50),
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    if (effectiveFullscreen) {
+                                        Surface(
+                                            onClick = { skipEffective(85_000L) },
+                                            color = Color.White.copy(alpha = 0.16f),
+                                            shape = RoundedCornerShape(50),
                                         ) {
-                                            Icon(
-                                                AniIcons.Forward85,
-                                                contentDescription = "Saltar intro (+85s)",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                            Text(
-                                                text = "Saltar intro",
-                                                color = Color.White,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                            )
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            ) {
+                                                Icon(
+                                                    AniIcons.Forward85,
+                                                    contentDescription = "Saltar intro (+85s)",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                                Text(
+                                                    text = "Saltar intro",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                            }
                                         }
                                     }
+
+                                    PlayerControllerDefaults.FullscreenIcon(fullscreenState)
                                 }
                             }
                         }
@@ -1297,8 +1429,8 @@ fun VideoPlayerScreen(
             nextEpisodeCountdown?.let { secondsLeft ->
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(end = 24.dp, bottom = 96.dp),
+                        .matchParentSize()
+                        .padding(end = if (effectiveFullscreen) 24.dp else 12.dp, bottom = if (effectiveFullscreen) 96.dp else 56.dp),
                     contentAlignment = Alignment.BottomEnd,
                 ) {
                     androidx.compose.material3.Surface(
@@ -1307,7 +1439,7 @@ fun VideoPlayerScreen(
                         contentColor = Color.White,
                     ) {
                         Column(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(if (effectiveFullscreen) 16.dp else 12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text(
@@ -1343,34 +1475,46 @@ fun VideoPlayerScreen(
                 }
             }
 
-            // Diálogo de error amigable
-            if (errorMessage != null) {
+            // Diálogo de error dentro del marco del reproductor
+            if (activeErrorMessage != null) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.92f)),
+                        .matchParentSize()
+                        .background(Color.Black.copy(alpha = 0.88f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(32.dp)
+                        modifier = Modifier.padding(if (effectiveFullscreen) 32.dp else 16.dp)
                     ) {
                         Text(
-                            text = "Error al reproducir",
+                            text = "No se pudo reproducir",
                             color = Color(0xFFFF5252),
                             fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleLarge
+                            style = if (effectiveFullscreen) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(6.dp))
                         Text(
-                            text = errorMessage ?: "",
+                            text = activeErrorMessage,
                             color = Color.White,
                             textAlign = TextAlign.Center,
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(Modifier.height(16.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (onNextEpisode != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (onChangeSource != null) {
+                                Button(
+                                    onClick = onChangeSource,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                ) {
+                                    Text("Elegir fuente")
+                                }
+                            }
+                            if (effectiveFullscreen && onNextEpisode != null) {
                                 OutlinedButton(
                                     onClick = onNextEpisode,
                                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
@@ -1378,21 +1522,19 @@ fun VideoPlayerScreen(
                                     Text("Siguiente ep.", color = Color.White)
                                 }
                             }
-                            if (onChangeSource != null) {
+                            if (effectiveFullscreen || animeForHistory == null) {
                                 OutlinedButton(
-                                    onClick = onChangeSource,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                    onClick = {
+                                        if (effectiveFullscreen && animeForHistory != null) {
+                                            fullscreenState.request(false)
+                                        } else {
+                                            onBack()
+                                        }
+                                    },
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
                                 ) {
-                                    Text("Cambiar fuente", color = Color.White)
+                                    Text(if (effectiveFullscreen && animeForHistory != null) "Salir pantalla completa" else "Volver", color = Color.White)
                                 }
-                            }
-                            Button(
-                                onClick = onBack,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary
-                                )
-                            ) {
-                                Text("Volver")
                             }
                         }
                     }
@@ -1416,37 +1558,41 @@ private fun PlayerSettingsOverlay(
     onTogglePlayerStats: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    BackHandler(onBack = onDismiss)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.45f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss,
-            )
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        contentAlignment = Alignment.CenterEnd,
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .widthIn(min = 280.dp, max = 340.dp)
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = {},
-                ),
-            shape = RoundedCornerShape(18.dp),
-            color = Color(0xFF16161C).copy(alpha = 0.96f),
-            contentColor = Color.White,
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
+                    onClick = onDismiss,
+                )
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            contentAlignment = Alignment.CenterEnd,
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+            Surface(
+                modifier = Modifier
+                    .widthIn(min = 280.dp, max = 340.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xFF16161C).copy(alpha = 0.96f),
+                contentColor = Color.White,
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
             ) {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1594,6 +1740,7 @@ private fun PlayerSettingsOverlay(
                     )
                 }
             }
+        }
         }
     }
 }

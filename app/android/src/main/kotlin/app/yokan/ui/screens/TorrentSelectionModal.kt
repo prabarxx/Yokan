@@ -77,6 +77,45 @@ fun TorrentSelectionModal(
     notice: String? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        dragHandle = null,
+    ) {
+        TorrentSelectionContent(
+            anime = anime,
+            episodeNumber = episodeNumber,
+            searchEngine = searchEngine,
+            animeAV1Client = animeAV1Client,
+            onTorrentSelect = onTorrentSelect,
+            onWebStreamSelect = onWebStreamSelect,
+            onDismiss = onDismiss,
+            notice = notice,
+        )
+    }
+}
+
+/**
+ * Contenido reutilizable del selector de fuentes (Servidores Web / Torrents), usado tanto dentro de
+ * [ModalBottomSheet] en modo retrato como en [ModalSideSheet] cuando el reproductor está en pantalla completa.
+ */
+@Composable
+fun TorrentSelectionContent(
+    anime: AniListMedia,
+    episodeNumber: Int,
+    searchEngine: NyaaSearchEngine,
+    animeAV1Client: AnimeAV1Client,
+    onTorrentSelect: (NyaaTorrent) -> Unit,
+    onWebStreamSelect: (WebStreamSource) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    notice: String? = null,
+    showHeader: Boolean = true,
+    fillListHeight: Boolean = false,
+) {
     val coroutineScope = rememberCoroutineScope()
     var isLoading by remember { mutableStateOf(true) }
     var isResolvingWebStream by remember { mutableStateOf(false) }
@@ -127,19 +166,12 @@ fun TorrentSelectionModal(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = null,
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 14.dp)
-        ) {
-            // Cabecera minimalista
+        if (showHeader) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -170,227 +202,235 @@ fun TorrentSelectionModal(
                     )
                 }
             }
+        }
 
-            if (notice != null) {
-                Text(
-                    text = notice,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
+        if (notice != null) {
+            Text(
+                text = notice,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Selector de pestañas estilo píldora limpia
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                SourceTabButton(
+                    title = "Servidores Web (${allWebSources.size})",
+                    selected = selectedCategoryTab == 0,
+                    onClick = { selectedCategoryTab = 0 },
+                    modifier = Modifier.weight(1f),
+                )
+                SourceTabButton(
+                    title = "Torrents (${allTorrents.size})",
+                    selected = selectedCategoryTab == 1,
+                    onClick = { selectedCategoryTab = 1 },
+                    modifier = Modifier.weight(1f),
                 )
             }
+        }
 
-            Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-            // Selector de pestañas estilo píldora limpia (sin emojis recargados)
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            ) {
-                Row(
+        val listModifier = if (fillListHeight) {
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        } else {
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+        }
+
+        when {
+            isLoading -> {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        .height(220.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    SourceTabButton(
-                        title = "Servidores Web (${allWebSources.size})",
-                        selected = selectedCategoryTab == 0,
-                        onClick = { selectedCategoryTab = 0 },
-                        modifier = Modifier.weight(1f),
-                    )
-                    SourceTabButton(
-                        title = "Torrents (${allTorrents.size})",
-                        selected = selectedCategoryTab == 1,
-                        onClick = { selectedCategoryTab = 1 },
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                        Text(
+                            text = "Buscando fuentes disponibles...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            when {
-                isLoading -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp),
-                        contentAlignment = Alignment.Center,
+            isResolvingWebStream -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
-                            Text(
-                                text = "Buscando fuentes disponibles...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                        Text(
+                            text = "Conectando con $resolvingServerName...",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
-                isResolvingWebStream -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp),
-                        contentAlignment = Alignment.Center,
+            }
+            errorMessage != null -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
-                            Text(
-                                text = "Conectando con $resolvingServerName...",
-                                fontWeight = FontWeight.SemiBold,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                        Icon(
+                            Icons.Rounded.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            text = errorMessage.orEmpty(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                 }
-                errorMessage != null -> {
+            }
+            selectedCategoryTab == 0 -> {
+                if (allWebSources.isEmpty()) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(180.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.Warning,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                            Text(
-                                text = errorMessage.orEmpty(),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
+                        Text(
+                            text = "No hay servidores web disponibles para este episodio.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                }
-                selectedCategoryTab == 0 -> {
-                    if (allWebSources.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "No hay servidores web disponibles para este episodio.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 420.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            items(allWebSources) { source ->
-                                WebStreamRow(
-                                    source = source,
-                                    isRecommended = source == allWebSources.firstOrNull() || source.isUpn,
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            isResolvingWebStream = true
-                                            resolvingServerName = source.displayName
-                                            val result = animeAV1Client.resolveStream(source)
-                                            isResolvingWebStream = false
-                                            result.fold(
-                                                onSuccess = { resolvedStream ->
-                                                    onWebStreamSelect(resolvedStream)
-                                                },
-                                                onFailure = { err ->
-                                                    errorMessage = "Error al conectar con ${source.displayName}: ${err.message}"
-                                                }
-                                            )
-                                        }
+                } else {
+                    LazyColumn(
+                        modifier = listModifier,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(allWebSources) { source ->
+                            WebStreamRow(
+                                source = source,
+                                isRecommended = source == allWebSources.firstOrNull() || source.isUpn,
+                                onClick = {
+                                    coroutineScope.launch {
+                                        isResolvingWebStream = true
+                                        resolvingServerName = source.displayName
+                                        val result = animeAV1Client.resolveStream(source)
+                                        isResolvingWebStream = false
+                                        result.fold(
+                                            onSuccess = { resolvedStream ->
+                                                onWebStreamSelect(resolvedStream)
+                                            },
+                                            onFailure = { err ->
+                                                errorMessage = "Error al conectar con ${source.displayName}: ${err.message}"
+                                            }
+                                        )
                                     }
-                                )
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    if (allTorrents.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(bottom = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = activeFilter == TorrentFilter.ALL,
-                                onClick = { activeFilter = TorrentFilter.ALL },
-                                label = { Text("Todos (${allTorrents.size})", fontSize = 12.sp) }
+                                }
                             )
-                            FilterChip(
-                                selected = activeFilter == TorrentFilter.SPANISH,
-                                onClick = { activeFilter = TorrentFilter.SPANISH },
-                                label = { Text("Sub Español", fontSize = 12.sp) }
-                            )
-                            FilterChip(
-                                selected = activeFilter == TorrentFilter.P1080,
-                                onClick = { activeFilter = TorrentFilter.P1080 },
-                                label = { Text("1080p", fontSize = 12.sp) }
-                            )
-                            FilterChip(
-                                selected = activeFilter == TorrentFilter.P720,
-                                onClick = { activeFilter = TorrentFilter.P720 },
-                                label = { Text("720p", fontSize = 12.sp) }
-                            )
-                        }
-                    }
-
-                    if (filteredTorrents.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = if (activeFilter != TorrentFilter.ALL) {
-                                    "No hay torrents para este filtro."
-                                } else {
-                                    "No se encontraron torrents disponibles para este episodio."
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 420.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            items(filteredTorrents) { torrent ->
-                                TorrentRow(
-                                    torrent = torrent,
-                                    isRecommended = torrent == allTorrents.firstOrNull() && torrent.score > 0.0,
-                                    onClick = { onTorrentSelect(torrent) }
-                                )
-                            }
                         }
                     }
                 }
             }
+            else -> {
+                if (allTorrents.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = activeFilter == TorrentFilter.ALL,
+                            onClick = { activeFilter = TorrentFilter.ALL },
+                            label = { Text("Todos (${allTorrents.size})", fontSize = 12.sp) }
+                        )
+                        FilterChip(
+                            selected = activeFilter == TorrentFilter.SPANISH,
+                            onClick = { activeFilter = TorrentFilter.SPANISH },
+                            label = { Text("Sub Español", fontSize = 12.sp) }
+                        )
+                        FilterChip(
+                            selected = activeFilter == TorrentFilter.P1080,
+                            onClick = { activeFilter = TorrentFilter.P1080 },
+                            label = { Text("1080p", fontSize = 12.sp) }
+                        )
+                        FilterChip(
+                            selected = activeFilter == TorrentFilter.P720,
+                            onClick = { activeFilter = TorrentFilter.P720 },
+                            label = { Text("720p", fontSize = 12.sp) }
+                        )
+                    }
+                }
 
+                if (filteredTorrents.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = if (activeFilter != TorrentFilter.ALL) {
+                                "No hay torrents para este filtro."
+                            } else {
+                                "No se encontraron torrents disponibles para este episodio."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = listModifier,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(filteredTorrents) { torrent ->
+                            TorrentRow(
+                                torrent = torrent,
+                                isRecommended = torrent == allTorrents.firstOrNull() && torrent.score > 0.0,
+                                onClick = { onTorrentSelect(torrent) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!fillListHeight) {
             Spacer(modifier = Modifier.height(12.dp))
         }
     }
