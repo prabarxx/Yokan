@@ -384,7 +384,7 @@ class AnimeAV1Client(
         if (!forceRefresh) {
             resolvedStreamCache[source.embedUrl]?.let { return@withContext Result.success(it) }
         } else {
-            resolvedStreamCache.remove(source.embedUrl)
+            resolvedStreamCache[source.embedUrl]?.let { invalidateStreamCache(it) }
         }
 
         val result = extractStreamUnverified(source)
@@ -1044,11 +1044,12 @@ class AnimeAV1Client(
                         val higherPriority = pending.filter { it.first < chosenIndex }
                         if (higherPriority.isEmpty()) break
 
-                        val graceResult = withTimeoutOrNull(remaining) {
-                            select {
+                        val graceResult = withTimeoutOrNull<Pair<Int, ResolvedCandidate?>>(remaining) {
+                            select<Pair<Int, ResolvedCandidate?>> {
                                 higherPriority.forEach { (i, d) -> d.onAwait { i to it } }
                             }
-                        } ?: break
+                        }
+                        if (graceResult == null) break
 
                         val (gIdx, gCandidate) = graceResult
                         pending = pending.filterNot { it.first == gIdx }
