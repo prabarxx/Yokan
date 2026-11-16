@@ -130,6 +130,7 @@ import me.him188.ani.app.ui.foundation.input.touchHorizontalScrollOnly
 import me.him188.ani.app.ui.foundation.layout.NestedScrollableColumn
 import me.him188.ani.app.ui.foundation.layout.NestedScrollableScope
 import me.him188.ani.app.ui.foundation.layout.PaddingValuesSides
+import me.him188.ani.app.ui.foundation.layout.rememberNestedScrollableColumnState
 import me.him188.ani.app.ui.foundation.layout.currentWindowAdaptiveInfo1
 import me.him188.ani.app.ui.foundation.layout.isWidthAtLeastMedium
 import me.him188.ani.app.ui.foundation.layout.isWidthCompact
@@ -516,7 +517,6 @@ fun AnimeDetailsPageContent(
                                         onEpisodeLongClick = onToggleEpisodeWatched,
                                         onShowAllEpisodes = { showEpisodeListDialog = true },
                                         onAnimeClick = onAnimeClick,
-                                        nestedScrollWorkaroundModifier = Modifier.nestedScrollWorkaround(),
                                     )
                                 }
 
@@ -528,7 +528,6 @@ fun AnimeDetailsPageContent(
                                         watchedEpisodes = watchedEpisodes,
                                         onEpisodeClick = onEpisodeClick,
                                         onEpisodeLongClick = onToggleEpisodeWatched,
-                                        nestedScrollWorkaroundModifier = Modifier.nestedScrollWorkaround(),
                                     )
                                 }
 
@@ -537,7 +536,6 @@ fun AnimeDetailsPageContent(
                                         relations = allRelations,
                                         recommendations = anime.recommendations,
                                         onAnimeClick = onAnimeClick,
-                                        nestedScrollWorkaroundModifier = Modifier.nestedScrollWorkaround(),
                                     )
                                 }
                             }
@@ -1086,7 +1084,7 @@ private fun SubjectDetailsContentTabRow(
 }
 
 @Composable
-private fun CompactDetailsTabContent(
+private fun NestedScrollableScope.CompactDetailsTabContent(
     anime: AniListMedia,
     allRelations: List<AniListRelation>,
     totalEpisodes: Int,
@@ -1097,16 +1095,17 @@ private fun CompactDetailsTabContent(
     onEpisodeLongClick: (Int) -> Unit,
     onShowAllEpisodes: () -> Unit,
     onAnimeClick: (AniListMedia) -> Unit,
-    nestedScrollWorkaroundModifier: Modifier,
 ) {
     val windowSizeClass = currentWindowAdaptiveInfo1().windowSizeClass
     val horizontalPadding = windowSizeClass.paneHorizontalPadding
     val verticalSpacing = if (currentWindowAdaptiveInfo1().isWidthCompact) 20.dp else 28.dp
+    val listState = rememberLazyListState()
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .then(nestedScrollWorkaroundModifier),
+            .nestedScrollWorkaround(listState),
+        state = listState,
         contentPadding = PaddingValues(vertical = verticalSpacing),
         verticalArrangement = Arrangement.spacedBy(verticalSpacing),
     ) {
@@ -1181,20 +1180,21 @@ private fun CompactDetailsTabContent(
 }
 
 @Composable
-private fun EpisodesTabContent(
+private fun NestedScrollableScope.EpisodesTabContent(
     totalEpisodes: Int,
     latestAired: Int,
     currentEpisode: Int,
     watchedEpisodes: Set<Int>,
     onEpisodeClick: (Int) -> Unit,
     onEpisodeLongClick: (Int) -> Unit,
-    nestedScrollWorkaroundModifier: Modifier,
 ) {
     val horizontalPadding = currentWindowAdaptiveInfo1().windowSizeClass.paneHorizontalPadding
+    val listState = rememberLazyListState()
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .then(nestedScrollWorkaroundModifier),
+            .nestedScrollWorkaround(listState),
+        state = listState,
         contentPadding = PaddingValues(horizontal = horizontalPadding, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -1229,17 +1229,18 @@ private fun EpisodesTabContent(
 }
 
 @Composable
-private fun RelatedTabContent(
+private fun NestedScrollableScope.RelatedTabContent(
     relations: List<AniListRelation>,
     recommendations: List<AniListRelation>,
     onAnimeClick: (AniListMedia) -> Unit,
-    nestedScrollWorkaroundModifier: Modifier,
 ) {
     val horizontalPadding = currentWindowAdaptiveInfo1().windowSizeClass.paneHorizontalPadding
+    val listState = rememberLazyListState()
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .then(nestedScrollWorkaroundModifier),
+            .nestedScrollWorkaround(listState),
+        state = listState,
         contentPadding = PaddingValues(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
