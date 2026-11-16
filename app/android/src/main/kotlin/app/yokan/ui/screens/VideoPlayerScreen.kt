@@ -2,6 +2,7 @@ package app.yokan.ui.screens
 
 import android.content.pm.ActivityInfo
 import android.os.Build
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.snap
@@ -60,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -214,16 +216,18 @@ private fun rememberPlayerTouchSeekState(
 /** Segundos de cuenta regresiva antes de pasar solo al siguiente episodio. */
 private const val AUTO_NEXT_SECONDS = 5
 
+private const val LOG_TAG = "YokanPlayer"
+
 /**
  * Tiempo que se espera un stream web antes de darlo por muerto y probar el siguiente servidor.
- * Antes eran 15 s (con lo que el usuario se quedaba 15 s viendo "Cargando...").
  */
-private const val WEB_WATCHDOG_MS = 10_000L
+private const val WEB_WATCHDOG_MS = 8_000L
 
 @Composable
 fun VideoPlayerScreen(
     torrent: NyaaTorrent? = null,
     webStream: WebStreamSource? = null,
+    sourceSelectionVersion: Int = 0,
     episodeNumber: Int? = null,
     absoluteEpisodeNumber: Int? = null,
     initialPositionMillis: Long = 0L,
@@ -286,6 +290,8 @@ fun VideoPlayerScreen(
 
     // --- Fallback automático entre servidores web ---
     var activeWebStream by remember { mutableStateOf(webStream) }
+    var lastHandledSelectionVersion by remember { mutableIntStateOf(sourceSelectionVersion) }
+    var webReloadNonce by remember { mutableIntStateOf(0) }
     val triedWebServers = remember { mutableSetOf<String>() }
     var webSourceReady by remember { mutableStateOf(false) }
     var isSwitchingWebSource by remember { mutableStateOf(false) }
@@ -294,12 +300,17 @@ fun VideoPlayerScreen(
     val currentToggleLanguage by rememberUpdatedState(onToggleAudioLanguage)
     val currentOnActiveStreamResolved by rememberUpdatedState(onActiveStreamResolved)
 
-    // Sincroniza cambios externos de webStream/torrent sin destruir el reproductor al cambiar de fuente
-    LaunchedEffect(webStream?.streamUrl, torrent?.magnetUrl, torrent?.torrentUrl) {
-        if (torrent == null && webStream != null && webStream.streamUrl != activeWebStream?.streamUrl) {
+    // Sincroniza cambios externos de webStream/torrent (incluyendo re-seleccionar la misma fuente para reintentar)
+    LaunchedEffect(webStream?.streamUrl, torrent?.magnetUrl, torrent?.torrentUrl, sourceSelectionVersion) {
+        val selectionChanged = sourceSelectionVersion != lastHandledSelectionVersion
+        lastHandledSelectionVersion = sourceSelectionVersion
+        if (torrent == null && webStream != null && (webStream.streamUrl != activeWebStream?.streamUrl || selectionChanged)) {
+            Log.i(LOG_TAG, "Nueva fuente web seleccionada: ${webStream.serverName} (selectionChanged=$selectionChanged)")
             triedWebServers.clear()
             errorMessage = null
+            loadingStatus = "Cargando..."
             activeWebStream = webStream
+            webReloadNonce++
         }
     }
 
@@ -312,6 +323,7 @@ fun VideoPlayerScreen(
         val failed = activeWebStream ?: return false
         val resolver = currentResolveNext ?: return false
         if (isSwitchingWebSource) return true
+        Log.w(LOG_TAG, "Cambiando servidor tras fallo de ${failed.serverName} ($reason): ${failed.streamUrl.take(80)}")
         isSwitchingWebSource = true
         triedWebServers.add(failed.serverName)
         val pos = exoPlayer?.currentPosition ?: 0L
@@ -328,8 +340,11 @@ fun VideoPlayerScreen(
             }
             isSwitchingWebSource = false
             if (next != null) {
+                Log.i(LOG_TAG, "Cambiado automáticamente a ${next.serverName}: ${next.streamUrl.take(80)}")
                 activeWebStream = next
+                webReloadNonce++
             } else {
+                Log.e(LOG_TAG, "Sin servidores alternativos tras fallo de ${failed.serverName} (tried=$triedWebServers)")
                 loadingStatus = null
                 errorMessage = "No hay más servidores disponibles para este episodio."
             }
@@ -573,6 +588,7 @@ fun VideoPlayerScreen(
         if (exoPlayer == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
+                Log.e(LOG_TAG, "ExoPlayer error code=${error.errorCode} server=${activeWebStream?.serverName}: ${error.message}", error)
                 logger.error("ExoPlayer error: ${error.message} (code=${error.errorCode})", error)
                 if (activeWebStream != null && switchToNextWebSource("error ${error.errorCode}")) return
                 errorMessage = "Error de reproducción: ${error.localizedMessage ?: error.message}"
@@ -589,6 +605,7 @@ fun VideoPlayerScreen(
                     nextEpisodeCountdown = null
                 }
                 if (playbackState == Player.STATE_READY) {
+                    Log.i(LOG_TAG, "ExoPlayer READY server=${activeWebStream?.serverName} duration=${exoPlayer.duration}")
                     loadingStatus = null
                     errorMessage = null
                     val dur = exoPlayer.duration
@@ -706,7 +723,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(activeWebStream?.streamUrl) {
+    LaunchedEffect(activeWebStream?.streamUrl, webReloadNonce) {
         val stream = activeWebStream ?: return@LaunchedEffect
         currentMediaData?.let { prev ->
             currentMediaData = null
@@ -721,6 +738,7 @@ fun VideoPlayerScreen(
         loadingStatus = "Cargando..."
         errorMessage = null
         try {
+            Log.i(LOG_TAG, "Iniciando ExoPlayer [${stream.serverName}] isHls=${stream.isHls} -> ${stream.streamUrl.take(90)}")
             logger.info("Iniciando reproducción de stream web: ${stream.streamUrl}")
             val uri = Uri.parse(stream.streamUrl)
 
@@ -796,15 +814,18 @@ fun VideoPlayerScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
+            Log.e(LOG_TAG, "Error preparando MediaSource [${stream.serverName}]: ${e.message}", e)
             logger.error("Error al reproducir stream web: ${e.message}", e)
-            errorMessage = "Error al reproducir stream: ${e.localizedMessage ?: e::class.simpleName}"
-            loadingStatus = null
+            if (!switchToNextWebSource("error preparar")) {
+                errorMessage = "Error al reproducir stream: ${e.localizedMessage ?: e::class.simpleName}"
+                loadingStatus = null
+            }
         }
     }
 
     // Watchdog: si el servidor no llega a READY y no da señales de vida, pasar al siguiente.
     // No dispara si el reproductor ya está descargando (hay búfer): un CDN lento no es un fallo.
-    LaunchedEffect(activeWebStream?.streamUrl) {
+    LaunchedEffect(activeWebStream?.streamUrl, webReloadNonce) {
         if (activeWebStream == null) return@LaunchedEffect
         delay(WEB_WATCHDOG_MS)
         if (!webSourceReady && errorMessage == null && !isSwitchingWebSource && exoBufferedPosition <= 0L) {

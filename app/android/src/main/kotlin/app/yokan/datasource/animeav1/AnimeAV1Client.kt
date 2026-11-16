@@ -1,5 +1,6 @@
 package app.yokan.datasource.animeav1
 
+import android.util.Log
 import app.yokan.anilist.model.AniListCoverImage
 import app.yokan.anilist.model.AniListMedia
 import app.yokan.anilist.model.AniListRelation
@@ -9,12 +10,10 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -30,8 +29,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.him188.ani.utils.coroutines.runSuspendCatching
 import me.him188.ani.utils.logging.logger
+import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class AnimeAV1Client(
     private val httpClient: HttpClient = HttpClient(),
@@ -43,13 +46,8 @@ class AnimeAV1Client(
     private val episodeSourcesCache = TtlCache<String, List<AnimeAV1Source>>(ttlMillis = SOURCES_CACHE_TTL_MS, maxSize = 256)
     private val resolvedStreamCache = TtlCache<String, WebStreamSource>(ttlMillis = STREAM_CACHE_TTL_MS, maxSize = 128)
 
-    // Veredicto de las sondas en segundo plano: true = la URL sirve el stream, false = está caída.
-    private val urlHealthCache = TtlCache<String, Boolean>(ttlMillis = URL_HEALTH_TTL_MS, maxSize = 256)
-
-    // Scope para sondas en segundo plano (no bloquean la reproducción).
-    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     companion object {
+        private const val LOG_TAG = "YokanPlayer"
         private const val BASE_URL = "https://animeav1.com"
         private const val UNS_BIO_BASE = "https://animeav1.uns.bio"
         private const val DEFAULT_USER_AGENT =
@@ -58,13 +56,40 @@ class AnimeAV1Client(
         private const val SLUG_CACHE_TTL_MS = 6 * 60 * 60_000L // 6 horas
         private const val SOURCES_CACHE_TTL_MS = 60 * 60_000L // 60 minutos
         private const val STREAM_CACHE_TTL_MS = 30 * 60_000L // 30 minutos (tokens HLS/MP4 caducan)
-        private const val URL_HEALTH_TTL_MS = 30 * 60_000L // 30 minutos
 
-        /** Timeout por candidato al resolver un stream. */
-        private const val RESOLVE_TIMEOUT_MS = 8_000L
+        /** Timeout total por candidato (extracción + sonda rápida). */
+        private const val RESOLVE_TIMEOUT_MS = 9_000L
+
+        /** Timeout corto de verificación HTTP Range para descartar servidores colgados (p.ej. a3.mp4upload). */
+        private const val STREAM_PROBE_TIMEOUT_MS = 3_500L
 
         /** Margen que se le da a un servidor de mayor prioridad para imponerse sobre el más rápido. */
-        private const val PRIORITY_GRACE_MS = 350L
+        private const val PRIORITY_GRACE_MS = 600L
+
+        private val TURBO_KEY_CODEPOINTS = listOf("𝕊", "𝔼", "𝕮", "𝚁", "𝔼", "𝚃", "𝓚", "𝓔", "𝓨", "𝟙", "𝟚", "𝟛")
+            .joinToString("") { Character.codePointAt(it, 0).toString(16) }
+        private val TURBO_IV_SALT = listOf("🔐", "🗝️", "🔑", "🚪", "🛡️", "⚡")
+            .joinToString("") { Character.codePointAt(it, 0).toString(16) }
+    }
+
+    private enum class ProbeResult {
+        ALIVE,
+        DEAD,
+        TIMEOUT,
+    }
+
+    private data class ResolvedCandidate(
+        val index: Int,
+        val stream: WebStreamSource,
+        val probe: ProbeResult,
+    )
+
+    /** Elimina un stream fallido de la caché en RAM para que un reintento extraiga token/espejo nuevo. */
+    fun invalidateStreamCache(stream: WebStreamSource) {
+        resolvedStreamCache.removeIf {
+            it.streamUrl == stream.streamUrl ||
+                (it.serverName.equals(stream.serverName, ignoreCase = true) && it.isDub == stream.isDub)
+        }
     }
 
     /**
@@ -321,10 +346,10 @@ class AnimeAV1Client(
             }
 
             // Filtrar solo servidores con extractor directo soportado y ordenar por prioridad (SUB antes que DUB):
-            // 1. MP4Upload primero (el más rápido y estable)
-            // 2. UPNShare / uns.bio
-            // 3. YourUpload
-            // 4. Voe
+            // 1. MP4Upload primero si el espejo responde (si cuelga como a3, la sonda lo descarta en ~3.5s)
+            // 2. Voe (HLS estándar .m3u8 + .ts)
+            // 3. UPNShare / TurboEmbed (HLS fMP4)
+            // 4. YourUpload
             // 5. VidHide
             // 6. StreamTape
             val sortedSources = sources
@@ -332,9 +357,9 @@ class AnimeAV1Client(
                 .sortedWith(
                     compareBy<AnimeAV1Source> { it.isDub }
                         .thenByDescending { it.isMp4Upload }
+                        .thenByDescending { it.isVoe }
                         .thenByDescending { it.isUpn }
                         .thenByDescending { it.server.equals("YourUpload", ignoreCase = true) }
-                        .thenByDescending { it.isVoe }
                         .thenByDescending { it.isVidHide }
                         .thenByDescending { it.isStreamTape }
                 )
@@ -350,86 +375,32 @@ class AnimeAV1Client(
 
     /**
      * Resuelve el enlace directo (.m3u8 o .mp4) para una fuente concreta.
-     * En el caso de UPNShare, aplica el descifrado AES-128-CBC sin anuncios.
+     * Solo cachea el resultado si supera la verificación HTTP Range (o si ya venía en caché).
      */
-    suspend fun resolveStream(source: AnimeAV1Source): Result<WebStreamSource> = withContext(Dispatchers.IO) {
-        resolvedStreamCache[source.embedUrl]?.let { return@withContext Result.success(it) }
+    suspend fun resolveStream(
+        source: AnimeAV1Source,
+        forceRefresh: Boolean = false,
+    ): Result<WebStreamSource> = withContext(Dispatchers.IO) {
+        if (!forceRefresh) {
+            resolvedStreamCache[source.embedUrl]?.let { return@withContext Result.success(it) }
+        } else {
+            resolvedStreamCache.remove(source.embedUrl)
+        }
 
+        val result = extractStreamUnverified(source)
+        result.onSuccess { stream ->
+            if (probeStream(stream.streamUrl, stream.headers, STREAM_PROBE_TIMEOUT_MS) == ProbeResult.ALIVE) {
+                resolvedStreamCache[source.embedUrl] = stream
+            }
+        }
+        result
+    }
+
+    private suspend fun extractStreamUnverified(source: AnimeAV1Source): Result<WebStreamSource> =
         runSuspendCatching {
             val resolvedServerName = source.server.ifBlank { source.canonicalServerName }
-            var upnProbe: Triple<String, String, Map<String, String>>? = null
             val webStream = when {
-                source.isUpn -> {
-                    val hash = Regex("""#([a-zA-Z0-9_-]+)""").find(source.embedUrl)?.groupValues?.get(1)
-                        ?: throw IllegalArgumentException("No se encontró el hash en la URL de UPN: ${source.embedUrl}")
-
-                    val apiUrl = "$UNS_BIO_BASE/api/v1/video?id=$hash&w=1920&h=1080&r="
-                    val response = httpClient.get(apiUrl) {
-                        header("Referer", "$UNS_BIO_BASE/")
-                        header("Origin", UNS_BIO_BASE)
-                        header("User-Agent", DEFAULT_USER_AGENT)
-                        header("Accept", "*/*")
-                    }
-
-                    if (!response.status.isSuccess()) {
-                        throw IllegalStateException("UPNShare API devolvió código: ${response.status}")
-                    }
-
-                    val hexPayload = response.bodyAsText().trim()
-                    val decryptedJson = AnimeAV1Cipher.decryptHex(hexPayload)
-
-                    // Token de acceso del CDN: sin él el manifest y los segmentos devuelven 403.
-                    val tokenParams = extractPkToken(decryptedJson)
-
-                    val cfNative = Regex(""""cfNative":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                        ?.replace("\\/", "/")
-                    val cf = Regex(""""cf":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                        ?.replace("\\/", "/")
-                    val sourceUrl = Regex(""""source":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                        ?.replace("\\/", "/")
-                    val hlsTiktok = Regex(""""hlsVideoTiktok":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)
-                        ?.replace("\\/", "/")
-
-                    // Candidatos en orden de preferencia: Cloudflare (sin anuncios) > origen directo > copia TikTok.
-                    val candidates = buildList {
-                        cfNative?.let { add("cfNative" to it) }
-                        cf?.let { add("cf" to it) }
-                        sourceUrl?.let { add("source" to it) }
-                        hlsTiktok?.let {
-                            add("hlsVideoTiktok" to if (it.startsWith("/")) "$UNS_BIO_BASE$it" else it)
-                        }
-                    }
-                    if (candidates.isEmpty()) {
-                        throw IllegalStateException("No se encontró URL de stream en la respuesta descifrada de UPN")
-                    }
-
-                    // Descarta los candidatos que una sonda previa ya marcó como caídos.
-                    val healthy = candidates.filterNot { (kind, _) ->
-                        urlHealthCache[urlHealthKey(source.embedUrl, kind)] == false
-                    }
-                    val ordered = healthy.ifEmpty { candidates }
-                    val (kind, rawUrl) = ordered.first()
-                    val streamUrl = appendQueryParams(rawUrl, tokenParams)
-
-                    val headers = mapOf(
-                        "Referer" to "$UNS_BIO_BASE/",
-                        "Origin" to UNS_BIO_BASE,
-                        "User-Agent" to DEFAULT_USER_AGENT,
-                        "Accept" to "*/*",
-                    )
-                    upnProbe = Triple(kind, streamUrl, headers)
-
-                    WebStreamSource(
-                        title = source.displayName,
-                        serverName = resolvedServerName,
-                        streamUrl = streamUrl,
-                        headers = headers,
-                        quality = "1080p",
-                        isHls = true,
-                        isDub = source.isDub,
-                        queryParams = tokenParams,
-                    )
-                }
+                source.isUpn -> extractUpnStream(source, resolvedServerName)
 
                 source.isMp4Upload -> {
                     val response = httpClient.get(source.embedUrl) {
@@ -488,14 +459,188 @@ class AnimeAV1Client(
 
                 else -> throw UnsupportedOperationException("Servidor web sin extractor directo soportado: ${source.server}")
             }
-            resolvedStreamCache[source.embedUrl] = webStream
-            // Sonda en segundo plano tras guardar en caché para poder invalidarla si el stream está caído.
-            upnProbe?.let { (kind, streamUrl, headers) ->
-                probeUrlHealth(source.embedUrl, kind, streamUrl, headers)
-            }
             webStream
+        }.onFailure { err ->
+            Log.w(LOG_TAG, "Fallo extrayendo ${source.canonicalServerName} (${source.embedUrl}): ${err.message}")
         }
+
+    private suspend fun extractUpnStream(
+        source: AnimeAV1Source,
+        resolvedServerName: String,
+    ): WebStreamSource {
+        if (source.embedUrl.contains("turboembed.", ignoreCase = true)) {
+            return extractTurboEmbedStream(source.embedUrl, source, resolvedServerName)
+        }
+
+        val hash = Regex("""#([a-zA-Z0-9_-]+)""").find(source.embedUrl)?.groupValues?.get(1)
+            ?: throw IllegalArgumentException("No se encontró el hash en la URL de UPN: ${source.embedUrl}")
+
+        // 1. Nuevo flujo UPNShare -> TurboEmbed (/api/public/resolve?file1=<hash>)
+        val resolveResp = runCatching {
+            httpClient.get("$UNS_BIO_BASE/api/public/resolve?file1=$hash") {
+                header("Referer", "$UNS_BIO_BASE/")
+                header("Origin", UNS_BIO_BASE)
+                header("User-Agent", DEFAULT_USER_AGENT)
+                header("Accept", "application/json, text/plain, */*")
+            }
+        }.getOrNull()
+
+        if (resolveResp != null && resolveResp.status.isSuccess()) {
+            val resolvedUrl = runCatching {
+                Json.parseToJsonElement(resolveResp.bodyAsText())
+                    .jsonObject["url"]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+            if (!resolvedUrl.isNullOrBlank() && resolvedUrl.startsWith("http", ignoreCase = true)) {
+                return extractTurboEmbedStream(resolvedUrl, source, resolvedServerName)
+            }
+        }
+
+        // 2. Respaldo legado /api/v1/video por si uns.bio reactiva la API anterior
+        val apiUrl = "$UNS_BIO_BASE/api/v1/video?id=$hash&w=1920&h=1080&r="
+        val response = httpClient.get(apiUrl) {
+            header("Referer", "$UNS_BIO_BASE/")
+            header("Origin", UNS_BIO_BASE)
+            header("User-Agent", DEFAULT_USER_AGENT)
+            header("Accept", "*/*")
+        }
+
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("UPNShare API devolvió código: ${response.status}")
+        }
+
+        val hexPayload = response.bodyAsText().trim()
+        val decryptedJson = AnimeAV1Cipher.decryptHex(hexPayload)
+        val tokenParams = extractPkToken(decryptedJson)
+
+        val cfNative = Regex(""""cfNative":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)?.replace("\\/", "/")
+        val cf = Regex(""""cf":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)?.replace("\\/", "/")
+        val sourceUrl = Regex(""""source":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)?.replace("\\/", "/")
+        val hlsTiktok = Regex(""""hlsVideoTiktok":"([^"]+)"""").find(decryptedJson)?.groupValues?.get(1)?.replace("\\/", "/")
+
+        val candidates = buildList {
+            cfNative?.let { add("cfNative" to it) }
+            cf?.let { add("cf" to it) }
+            sourceUrl?.let { add("source" to it) }
+            hlsTiktok?.let {
+                add("hlsVideoTiktok" to if (it.startsWith("/")) "$UNS_BIO_BASE$it" else it)
+            }
+        }
+        if (candidates.isEmpty()) {
+            throw IllegalStateException("No se encontró URL de stream en la respuesta descifrada de UPN")
+        }
+
+        val (_, rawUrl) = candidates.first()
+        val streamUrl = appendQueryParams(rawUrl, tokenParams)
+
+        return WebStreamSource(
+            title = source.displayName,
+            serverName = resolvedServerName,
+            streamUrl = streamUrl,
+            headers = mapOf(
+                "Referer" to "$UNS_BIO_BASE/",
+                "Origin" to UNS_BIO_BASE,
+                "User-Agent" to DEFAULT_USER_AGENT,
+                "Accept" to "*/*",
+            ),
+            quality = "1080p",
+            isHls = true,
+            isDub = source.isDub,
+            queryParams = tokenParams,
+        )
     }
+
+    private suspend fun extractTurboEmbedStream(
+        targetUrl: String,
+        source: AnimeAV1Source,
+        resolvedServerName: String,
+    ): WebStreamSource {
+        val uri = URI(targetUrl)
+        val scheme = uri.scheme?.takeIf { it.isNotBlank() } ?: "https"
+        val host = uri.host?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Host inválido en TurboEmbed: $targetUrl")
+        val videoId = uri.path?.trim('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("ID de video no encontrado en TurboEmbed: $targetUrl")
+
+        val dayHex = (System.currentTimeMillis() / 86_400_000L).toString(16)
+        val keyHex = (TURBO_KEY_CODEPOINTS + dayHex).take(32).padEnd(32, '0')
+        val hostHex = host.toByteArray(StandardCharsets.UTF_8).joinToString("") { "%02x".format(it) }
+        val ivHex = (TURBO_IV_SALT + hostHex).take(32).padEnd(32, '0')
+
+        val keySpec = SecretKeySpec(hexToBytes(keyHex), "AES")
+        val ivSpec = IvParameterSpec(hexToBytes(ivHex))
+
+        val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        encCipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
+        val encryptedIdHex = bytesToHex(encCipher.doFinal(videoId.toByteArray(StandardCharsets.UTF_8)))
+
+        val trackingResponse = httpClient.get("$scheme://$host/api/stream/tracking?c=$encryptedIdHex") {
+            header("User-Agent", DEFAULT_USER_AGENT)
+            header("Referer", targetUrl)
+            header("Origin", "$scheme://$host")
+            header("Accept", "application/json, text/plain, */*")
+        }
+
+        val xTrackingHex = trackingResponse.headers["X-Tracking"]?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("TurboEmbed no devolvió cabecera X-Tracking (HTTP ${trackingResponse.status.value})")
+
+        val decCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        decCipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+        val decryptedJson = String(decCipher.doFinal(hexToBytes(xTrackingHex)), StandardCharsets.UTF_8)
+
+        val streamObj = Json.parseToJsonElement(decryptedJson).jsonObject["stream"]?.jsonObject
+            ?: throw IllegalStateException("TurboEmbed sin objeto 'stream'")
+
+        // OJO: No usar 'tiktok' porque sus segmentos (.image) anteponen cabeceras PNG falsas (\x89PNG)
+        // que ExoPlayer no puede demuxear; 'hls' y 'direct' sirven fMP4/TS puros.
+        val urlCandidates = listOfNotNull(
+            streamObj["hls"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) },
+            streamObj["direct"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) },
+        ).distinct()
+
+        if (urlCandidates.isEmpty()) {
+            throw IllegalStateException("TurboEmbed sin URL HLS/directa compatible")
+        }
+
+        val headers = mapOf(
+            "Referer" to "$scheme://$host/",
+            "Origin" to "$scheme://$host",
+            "User-Agent" to DEFAULT_USER_AGENT,
+            "Accept" to "*/*",
+        )
+
+        val chosenUrl = if (urlCandidates.size > 1) {
+            urlCandidates.firstOrNull { url ->
+                probeStream(url, headers, STREAM_PROBE_TIMEOUT_MS) == ProbeResult.ALIVE
+            } ?: urlCandidates.first()
+        } else {
+            urlCandidates.first()
+        }
+
+        return WebStreamSource(
+            title = source.displayName,
+            serverName = resolvedServerName,
+            streamUrl = chosenUrl,
+            headers = headers,
+            quality = "1080p",
+            isHls = true,
+            isDub = source.isDub,
+        )
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val len = hex.length
+        val out = ByteArray(len / 2)
+        var i = 0
+        while (i < len) {
+            out[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+            i += 2
+        }
+        return out
+    }
+
+    private fun bytesToHex(bytes: ByteArray): String =
+        bytes.joinToString("") { "%02x".format(it) }
 
     private suspend fun extractVoeStream(source: AnimeAV1Source): WebStreamSource {
         var currentUrl = source.embedUrl
@@ -505,7 +650,8 @@ class AnimeAV1Client(
         }.bodyAsText()
 
         // Voe frecuentemente redirige por JS: window.location.href = 'https://...'
-        val jsRedirect = Regex("""window\.location\.href\s*=\s*['"](https?://[^'"]+)['"]""").find(html)?.groupValues?.get(1)
+        val jsRedirect = Regex("""window\.location(?:\.href)?\s*=\s*['"](https?://[^'"]+)['"]""")
+            .find(html)?.groupValues?.get(1)
         if (!jsRedirect.isNullOrBlank()) {
             currentUrl = jsRedirect
             html = httpClient.get(currentUrl) {
@@ -514,19 +660,23 @@ class AnimeAV1Client(
             }.bodyAsText()
         }
 
-        // 1. Buscar hls codificado en Base64 o enlace directo m3u8
+        // 1. Nuevo formato Voe: <script type="application/json">["<ofuscado>"]</script>
+        val jsonPayloadStream = extractVoeFromObfuscatedJsonScript(html)
+
+        // 2. Fallback formato anterior ('hls': Base64 o URL .m3u8 directa)
         val hlsRaw = Regex("""['"]hls['"]\s*:\s*['"]([^'"]+)['"]""").find(html)?.groupValues?.get(1)
         val decodedHls = hlsRaw?.let { raw ->
             if (raw.startsWith("http", ignoreCase = true)) {
                 raw
             } else {
                 runCatching {
-                    String(java.util.Base64.getDecoder().decode(raw), StandardCharsets.UTF_8)
+                    String(java.util.Base64.getDecoder().decode(padBase64(raw)), StandardCharsets.UTF_8)
                 }.getOrNull()?.takeIf { it.startsWith("http", ignoreCase = true) }
             }
         }
 
-        val streamUrl = decodedHls
+        val streamUrl = jsonPayloadStream
+            ?: decodedHls
             ?: Regex("""(https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*)""").find(html)?.groupValues?.get(1)
             ?: throw IllegalStateException("No se encontró stream HLS en Voe")
 
@@ -539,11 +689,66 @@ class AnimeAV1Client(
                 "Referer" to "$originDomain/",
                 "Origin" to originDomain,
                 "User-Agent" to DEFAULT_USER_AGENT,
+                "Accept" to "*/*",
             ),
             quality = "720p",
             isHls = true,
             isDub = source.isDub,
         )
+    }
+
+    private fun extractVoeFromObfuscatedJsonScript(html: String): String? {
+        val matches = Regex(
+            """<script[^>]*type=["']application/json["'][^>]*>\s*\[\s*"([^"]+)"\s*\]\s*</script>""",
+            RegexOption.IGNORE_CASE,
+        ).findAll(html)
+
+        for (match in matches) {
+            val encoded = match.groupValues[1]
+            val jsonText = decodeVoeJsonPayload(encoded) ?: continue
+            val parsedUrl = runCatching {
+                val obj = Json.parseToJsonElement(jsonText).jsonObject
+                obj["source"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) }
+                    ?: obj["fallback"]?.jsonPrimitive?.contentOrNull?.takeIf { it.startsWith("http", ignoreCase = true) }
+            }.getOrNull()
+            if (!parsedUrl.isNullOrBlank()) {
+                return parsedUrl
+            }
+        }
+        return null
+    }
+
+    private fun decodeVoeJsonPayload(encoded: String): String? = runCatching {
+        // 1. ROT13 sobre letras ASCII
+        val rot13 = buildString(encoded.length) {
+            for (ch in encoded) {
+                append(
+                    when (ch) {
+                        in 'a'..'z' -> ('a'.code + (ch.code - 'a'.code + 13) % 26).toChar()
+                        in 'A'..'Z' -> ('A'.code + (ch.code - 'A'.code + 13) % 26).toChar()
+                        else -> ch
+                    }
+                )
+            }
+        }
+        // 2. Eliminar marcadores de basura que Voe inyecta antes de Base64
+        val cleaned = rot13.replace(Regex("""(@\$|\^\^|~@|%\?|\*~|!!|#&)"""), "")
+        // 3. Base64 -> desplazar bytes (-3) -> invertir
+        val step1Bytes = java.util.Base64.getDecoder().decode(padBase64(cleaned))
+        val shiftedReversed = buildString(step1Bytes.size) {
+            for (i in step1Bytes.indices.reversed()) {
+                append(((step1Bytes[i].toInt() and 0xFF) - 3).toChar())
+            }
+        }
+        // 4. Base64 final -> JSON UTF-8 con "source"/"fallback"
+        val jsonBytes = java.util.Base64.getDecoder().decode(padBase64(shiftedReversed))
+        String(jsonBytes, StandardCharsets.UTF_8)
+    }.getOrNull()
+
+    private fun padBase64(input: String): String {
+        val trimmed = input.trim()
+        val rem = trimmed.length % 4
+        return if (rem == 0) trimmed else trimmed + "=".repeat(4 - rem)
     }
 
     private suspend fun extractVidHideStream(source: AnimeAV1Source): WebStreamSource {
@@ -645,16 +850,41 @@ class AnimeAV1Client(
     }
 
     /**
-     * Comprueba de forma ultrarrápida si el enlace de video está disponible (no 404, no caído).
+     * Comprueba de forma ultrarrápida si el enlace de video está disponible (no 404, no caído, sin cuelgue TLS).
      */
-    suspend fun verifyStreamUrlAlive(url: String, headers: Map<String, String> = emptyMap()): Boolean = withContext(Dispatchers.IO) {
-        runSuspendCatching {
-            val response = httpClient.get(url) {
-                headers.forEach { (k, v) -> header(k, v) }
-                header("Range", "bytes=0-10")
+    suspend fun verifyStreamUrlAlive(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMillis: Long = STREAM_PROBE_TIMEOUT_MS,
+    ): Boolean = probeStream(url, headers, timeoutMillis) == ProbeResult.ALIVE
+
+    private suspend fun probeStream(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMillis: Long = STREAM_PROBE_TIMEOUT_MS,
+    ): ProbeResult = withContext(Dispatchers.IO) {
+        val result = withTimeoutOrNull(timeoutMillis) {
+            try {
+                val response = httpClient.get(url) {
+                    headers.forEach { (k, v) -> header(k, v) }
+                    if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                        header("User-Agent", DEFAULT_USER_AGENT)
+                    }
+                    header("Range", "bytes=0-10")
+                }
+                if (response.status.value in 200..399) ProbeResult.ALIVE else ProbeResult.DEAD
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val msg = e.message.orEmpty()
+                if (msg.contains("timeout", ignoreCase = true) || msg.contains("timed out", ignoreCase = true)) {
+                    ProbeResult.TIMEOUT
+                } else {
+                    ProbeResult.DEAD
+                }
             }
-            response.status.value in 200..399
-        }.getOrDefault(false)
+        }
+        result ?: ProbeResult.TIMEOUT
     }
 
     /**
@@ -683,31 +913,6 @@ class AnimeAV1Client(
         return url + separator + query
     }
 
-    private fun urlHealthKey(embedUrl: String, kind: String): String = "$embedUrl|$kind"
-
-    /**
-     * Sonda en segundo plano que comprueba si la URL resuelta realmente sirve el stream.
-     *
-     * No bloquea la reproducción: solo guarda el veredicto para que la siguiente resolución
-     * descarte candidatos caídos en lugar de elegir siempre el de mayor prioridad.
-     */
-    private fun probeUrlHealth(
-        embedUrl: String,
-        kind: String,
-        url: String,
-        headers: Map<String, String>,
-    ) {
-        val key = urlHealthKey(embedUrl, kind)
-        backgroundScope.launch {
-            val alive = verifyStreamUrlAlive(url, headers)
-            urlHealthCache[key] = alive
-            if (!alive) {
-                resolvedStreamCache.removeIf { it.streamUrl == url }
-                logger.warn("URL de stream marcada como caída ($kind): $url")
-            }
-        }
-    }
-
     /**
      * Devuelve un par (hasSub, hasDub) indicando qué pistas de idioma están disponibles en AnimeAV1.
      */
@@ -730,6 +935,38 @@ class AnimeAV1Client(
      * Intenta en cascada en orden de prioridad respetando el idioma preferido ([preferDub]);
      * si un servidor está caído (404/500/timeout), salta automáticamente al siguiente espejo.
      */
+    private suspend fun resolveBestInternal(
+        romajiTitle: String,
+        englishTitle: String?,
+        episodeNumber: Int,
+        preferDub: Boolean,
+    ): WebStreamSource? {
+        val slug = resolveSlug(romajiTitle, englishTitle)
+        val sources = getEpisodeSources(slug, episodeNumber)
+        if (sources.isEmpty()) {
+            Log.w(LOG_TAG, "AnimeAV1 sin fuentes para slug '$slug' ep $episodeNumber")
+            logger.info("No se encontraron fuentes en AnimeAV1 para slug '$slug' ep $episodeNumber")
+            return null
+        }
+
+        // Filtrar preferentemente el idioma elegido (SUB o LAT); si no existe en ese idioma, caer al otro
+        val preferredSources = sources.filter { it.isDub == preferDub }.ifEmpty { sources }
+        Log.i(
+            LOG_TAG,
+            "Resolviendo ep $episodeNumber ('$slug', preferDub=$preferDub) entre: ${preferredSources.joinToString { "${it.canonicalServerName}:${if (it.isDub) "LAT" else "SUB"}" }}",
+        )
+
+        // Resolver y sondear en paralelo hasta 5 candidatos: descarta hosts colgados como a3.mp4upload.com:183
+        val stream = resolveFirstSuccessful(preferredSources.take(5))
+        if (stream != null) {
+            Log.i(LOG_TAG, "Fuente elegida: ${stream.serverName} (dub=${stream.isDub}) -> ${stream.streamUrl.take(90)}")
+            logger.info("Fuente resuelta: ${stream.serverName} (dub=${stream.isDub}) -> ${stream.streamUrl}")
+        } else {
+            Log.w(LOG_TAG, "Ningún candidato respondió para '$slug' ep $episodeNumber")
+        }
+        return stream
+    }
+
     suspend fun resolveBestStream(
         romajiTitle: String,
         englishTitle: String?,
@@ -737,34 +974,15 @@ class AnimeAV1Client(
         preferDub: Boolean = false,
     ): Result<WebStreamSource?> = withContext(Dispatchers.IO) {
         runSuspendCatching {
-            val slug = resolveSlug(romajiTitle, englishTitle)
-            val sources = getEpisodeSources(slug, episodeNumber)
-            if (sources.isEmpty()) {
-                logger.info("No se encontraron fuentes en AnimeAV1 para slug '$slug' ep $episodeNumber")
-                return@runSuspendCatching null
-            }
-
-            // Filtrar preferentemente el idioma elegido (SUB o LAT); si no existe en ese idioma, caer al otro
-            val preferredSources = sources.filter { it.isDub == preferDub }.ifEmpty { sources }
-
-            // Resolver en PARALELO los 3 mejores servidores y devolver el primero que funcione.
-            // Ya no se hace verifyStreamUrlAlive en el camino crítico:
-            // ExoPlayer falla rápido si el enlace está caído y el usuario puede cambiar de fuente.
-            val stream = resolveFirstSuccessful(preferredSources.take(3))
-            if (stream != null) {
-                logger.info("Fuente resuelta: ${stream.serverName} (dub=${stream.isDub}) -> ${stream.streamUrl}")
-            }
-            stream
+            resolveBestInternal(romajiTitle, englishTitle, episodeNumber, preferDub)
         }
     }
 
     /**
-     * Resuelve varios candidatos **en paralelo** y devuelve el primero que funciona.
+     * Resuelve y verifica varios candidatos **en paralelo**, devolviendo el primero que responde vivo.
      *
-     * Antes se esperaban en orden de prioridad (`for (d in deferred) d.await()`), lo que hacía que
-     * un servidor caído retrasara la resolución hasta agotar su timeout (5 s) aunque otro ya
-     * estuviera listo. Ahora gana el primero que responde, con una pequeña ventana de gracia
-     * para que un servidor de mayor prioridad pueda imponerse si responde casi igual de rápido.
+     * Concede una pequeña ventana de gracia a los servidores de mayor prioridad que también respondan vivos,
+     * descartando inmediatamente enlaces muertos (403/404) o que cuelgan en handshake TLS (p.ej. a3.mp4upload.com).
      */
     private suspend fun resolveFirstSuccessful(
         sources: List<AnimeAV1Source>,
@@ -772,50 +990,81 @@ class AnimeAV1Client(
     ): WebStreamSource? {
         if (sources.isEmpty()) return null
 
-        // Si algún candidato ya estaba resuelto (precarga previa), no hace falta pedir nada por red.
+        // Solo se cachean URLs que ya pasaron ProbeResult.ALIVE.
         sources.firstNotNullOfOrNull { resolvedStreamCache[it.embedUrl] }?.let { cached ->
+            Log.i(LOG_TAG, "Usando stream precargado: ${cached.serverName} -> ${cached.streamUrl.take(90)}")
             logger.info("Usando stream precargado: ${cached.serverName} -> ${cached.streamUrl}")
             return cached
         }
 
         return coroutineScope {
-            val deferred = sources.map { src ->
+            val deferred = sources.mapIndexed { index, src ->
                 async {
                     withTimeoutOrNull(timeoutMillis) {
-                        resolveStream(src).getOrNull()
+                        val stream = extractStreamUnverified(src).getOrNull() ?: return@withTimeoutOrNull null
+                        val probe = probeStream(stream.streamUrl, stream.headers, STREAM_PROBE_TIMEOUT_MS)
+                        Log.i(
+                            LOG_TAG,
+                            "Sonda [${src.canonicalServerName}/${if (src.isDub) "LAT" else "SUB"}] -> $probe (${stream.streamUrl.take(80)})",
+                        )
+                        if (probe == ProbeResult.ALIVE) {
+                            resolvedStreamCache[src.embedUrl] = stream
+                        }
+                        ResolvedCandidate(index = index, stream = stream, probe = probe)
                     }
                 }
             }
             try {
-                var pending = deferred.mapIndexed { index, deferred -> index to deferred }
+                var pending = deferred.mapIndexed { index, job -> index to job }
                 var chosen: WebStreamSource? = null
+                var chosenIndex = Int.MAX_VALUE
+                var fallbackTimeout: WebStreamSource? = null
 
                 while (pending.isNotEmpty()) {
-                    val (index, stream) = select {
+                    val (index, candidate) = select {
                         pending.forEach { (i, d) -> d.onAwait { i to it } }
                     }
                     pending = pending.filterNot { it.first == index }
-                    if (stream == null) continue
-                    chosen = stream
+                    if (candidate == null) continue
+                    if (candidate.probe != ProbeResult.ALIVE) {
+                        if (candidate.probe == ProbeResult.TIMEOUT && fallbackTimeout == null) {
+                            fallbackTimeout = candidate.stream
+                        }
+                        continue
+                    }
 
-                    // Ventana de gracia: si queda algún servidor de MAYOR prioridad sin responder,
-                    // se le concede un instante para que gane (prioridad por encima de velocidad).
-                    val higherPriority = pending.filter { it.first < index }
-                    if (higherPriority.isNotEmpty()) {
-                        val grace = withTimeoutOrNull(PRIORITY_GRACE_MS) {
+                    chosen = candidate.stream
+                    chosenIndex = candidate.index
+
+                    // Ventana de gracia: permitir que un servidor de MAYOR prioridad que también esté vivo gane.
+                    val graceDeadline = System.currentTimeMillis() + PRIORITY_GRACE_MS
+                    while (true) {
+                        val remaining = graceDeadline - System.currentTimeMillis()
+                        if (remaining <= 0L) break
+                        val higherPriority = pending.filter { it.first < chosenIndex }
+                        if (higherPriority.isEmpty()) break
+
+                        val graceResult = withTimeoutOrNull(remaining) {
                             select {
                                 higherPriority.forEach { (i, d) -> d.onAwait { i to it } }
                             }
-                        }
-                        if (grace != null) {
-                            val (graceIndex, graceStream) = grace
-                            pending = pending.filterNot { it.first == graceIndex }
-                            if (graceStream != null) chosen = graceStream
+                        } ?: break
+
+                        val (gIdx, gCandidate) = graceResult
+                        pending = pending.filterNot { it.first == gIdx }
+                        if (gCandidate != null && gCandidate.probe == ProbeResult.ALIVE && gCandidate.index < chosenIndex) {
+                            chosen = gCandidate.stream
+                            chosenIndex = gCandidate.index
+                            if (chosenIndex == 0) break
                         }
                     }
                     break
                 }
-                chosen
+
+                if (chosen == null && fallbackTimeout != null) {
+                    Log.w(LOG_TAG, "Ningún candidato respondió al probe; usando último recurso timeout: ${fallbackTimeout.serverName}")
+                }
+                chosen ?: fallbackTimeout
             } finally {
                 deferred.forEach { it.cancel() }
             }
@@ -834,11 +1083,7 @@ class AnimeAV1Client(
         failed: WebStreamSource? = null,
         preferDub: Boolean = failed?.isDub ?: false,
     ): WebStreamSource? = withContext(Dispatchers.IO) {
-        failed?.let { f ->
-            resolvedStreamCache.removeIf {
-                it.streamUrl == f.streamUrl || (it.serverName.equals(f.serverName, ignoreCase = true) && it.isDub == f.isDub)
-            }
-        }
+        failed?.let { invalidateStreamCache(it) }
         runSuspendCatching {
             val slug = resolveSlug(romajiTitle, englishTitle)
             val sources = getEpisodeSources(slug, episodeNumber)
@@ -849,10 +1094,17 @@ class AnimeAV1Client(
                             tried.equals(src.canonicalServerName, ignoreCase = true)
                     }
                 }
+            Log.i(
+                LOG_TAG,
+                "Fallback ep $episodeNumber saltando $triedServers -> candidatos: ${candidates.joinToString { it.canonicalServerName }}",
+            )
             // En paralelo: antes se probaban uno a uno, encadenando una petición HTTP por servidor.
             val stream = resolveFirstSuccessful(candidates)
             if (stream != null) {
+                Log.i(LOG_TAG, "Fallback -> ${stream.serverName} (dub=${stream.isDub}): ${stream.streamUrl.take(90)}")
                 logger.info("Fallback -> ${stream.serverName} (dub=${stream.isDub}): ${stream.streamUrl}")
+            } else {
+                Log.w(LOG_TAG, "Fallback agotado para ep $episodeNumber (saltados=$triedServers)")
             }
             stream
         }.getOrNull()

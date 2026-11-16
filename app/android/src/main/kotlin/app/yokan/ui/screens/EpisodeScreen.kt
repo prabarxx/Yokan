@@ -1,5 +1,6 @@
 package app.yokan.ui.screens
 
+import android.util.Log
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
@@ -155,6 +156,7 @@ fun EpisodeScreen(
     var isFullscreen by rememberSaveable { mutableStateOf(false) }
     var activeWebStream by remember { mutableStateOf<WebStreamSource?>(initialWebStream) }
     var activeTorrent by remember { mutableStateOf<NyaaTorrent?>(initialTorrent) }
+    var sourceSelectionVersion by remember { mutableIntStateOf(0) }
     var isAutoResolving by remember { mutableStateOf(initialWebStream == null && initialTorrent == null) }
     var manualSelectionNotice by remember { mutableStateOf<String?>(null) }
     var hasBothLanguages by remember { mutableStateOf(false) }
@@ -178,8 +180,42 @@ fun EpisodeScreen(
         specialVersions = specials
     }
 
-    // Detecta idiomas disponibles, precarga episodio siguiente y resuelve fuente web automática para currentEpisode
+    // Resuelve primero el episodio actual para no competir en red con la precarga ni duplicar requests;
+    // luego consulta idiomas disponibles (ya en caché) y precarga el episodio siguiente.
     LaunchedEffect(anime.id, currentEpisode) {
+        if (activeWebStream == null && activeTorrent == null) {
+            isAutoResolving = true
+            manualSelectionNotice = null
+            Log.i("YokanPlayer", "Auto-resolviendo ep $currentEpisode de '${anime.title.romaji}' (preferDub=$preferDub)")
+            val res = withTimeoutOrNull(EPISODE_AUTO_RESOLVE_TIMEOUT_MS) {
+                animeAV1Client.resolveBestStream(
+                    romajiTitle = anime.title.romaji,
+                    englishTitle = anime.title.english,
+                    episodeNumber = currentEpisode,
+                    preferDub = preferDub,
+                )
+            }
+            isAutoResolving = false
+            if (res == null) {
+                Log.w("YokanPlayer", "Timeout auto-resolviendo ep $currentEpisode de '${anime.title.romaji}'")
+                manualSelectionNotice = "La búsqueda automática tardó demasiado. Toca para elegir servidor o torrent."
+            } else {
+                val best = res.getOrNull()
+                if (best != null) {
+                    if (activeWebStream == null && activeTorrent == null) {
+                        Log.i("YokanPlayer", "Auto-resuelto ep $currentEpisode -> ${best.serverName} (${best.streamUrl.take(80)})")
+                        activeWebStream = best
+                        sourceSelectionVersion++
+                    }
+                } else if (activeWebStream == null && activeTorrent == null) {
+                    Log.w("YokanPlayer", "Sin stream automático para ep $currentEpisode de '${anime.title.romaji}'", res.exceptionOrNull())
+                    manualSelectionNotice = "No se encontró stream automático. Toca para elegir fuente manualmente."
+                }
+            }
+        } else {
+            isAutoResolving = false
+        }
+
         launch {
             val (hasSub, hasDub) = animeAV1Client.getAvailableLanguages(
                 romajiTitle = anime.title.romaji,
@@ -194,38 +230,13 @@ fun EpisodeScreen(
                 preferDub = preferDub,
             )
         }
-
-        if (activeWebStream == null && activeTorrent == null) {
-            isAutoResolving = true
-            manualSelectionNotice = null
-            val res = withTimeoutOrNull(EPISODE_AUTO_RESOLVE_TIMEOUT_MS) {
-                animeAV1Client.resolveBestStream(
-                    romajiTitle = anime.title.romaji,
-                    englishTitle = anime.title.english,
-                    episodeNumber = currentEpisode,
-                    preferDub = preferDub,
-                )
-            }
-            isAutoResolving = false
-            if (res == null) {
-                manualSelectionNotice = "La búsqueda automática tardó demasiado. Toca para elegir servidor o torrent."
-            } else {
-                val best = res.getOrNull()
-                if (best != null) {
-                    activeWebStream = best
-                } else {
-                    manualSelectionNotice = "No se encontró stream automático. Toca para elegir fuente manualmente."
-                }
-            }
-        } else {
-            isAutoResolving = false
-        }
     }
 
     fun selectEpisode(ep: Int) {
         if (ep == currentEpisode) return
         activeWebStream = null
         activeTorrent = null
+        sourceSelectionVersion++
         manualSelectionNotice = null
         isAutoResolving = true
         currentEpisode = ep
@@ -276,6 +287,7 @@ fun EpisodeScreen(
             VideoPlayerScreen(
                 torrent = activeTorrent,
                 webStream = activeWebStream,
+                sourceSelectionVersion = sourceSelectionVersion,
                 episodeNumber = currentEpisode,
                 absoluteEpisodeNumber = anime.calculateAbsoluteEpisode(currentEpisode).takeIf { it != currentEpisode },
                 episodeTitle = currentEpisodeSubtitle,
@@ -355,6 +367,7 @@ fun EpisodeScreen(
                                     onTorrentSelect = { torrent ->
                                         activeWebStream = null
                                         activeTorrent = torrent
+                                        sourceSelectionVersion++
                                         manualSelectionNotice = null
                                         isAutoResolving = false
                                         showSourceSelector = false
@@ -362,6 +375,7 @@ fun EpisodeScreen(
                                     onWebStreamSelect = { webStream ->
                                         activeTorrent = null
                                         activeWebStream = webStream
+                                        sourceSelectionVersion++
                                         manualSelectionNotice = null
                                         isAutoResolving = false
                                         showSourceSelector = false
@@ -532,6 +546,7 @@ fun EpisodeScreen(
             onTorrentSelect = { torrent ->
                 activeWebStream = null
                 activeTorrent = torrent
+                sourceSelectionVersion++
                 manualSelectionNotice = null
                 isAutoResolving = false
                 showSourceSelector = false
@@ -539,6 +554,7 @@ fun EpisodeScreen(
             onWebStreamSelect = { webStream ->
                 activeTorrent = null
                 activeWebStream = webStream
+                sourceSelectionVersion++
                 manualSelectionNotice = null
                 isAutoResolving = false
                 showSourceSelector = false

@@ -347,7 +347,7 @@ fun TorrentSelectionContent(
                                     coroutineScope.launch {
                                         isResolvingWebStream = true
                                         resolvingServerName = source.displayName
-                                        val result = animeAV1Client.resolveStream(source)
+                                        val result = animeAV1Client.resolveStream(source, forceRefresh = true)
                                         isResolvingWebStream = false
                                         result.fold(
                                             onSuccess = { resolvedStream ->

@@ -13,7 +13,9 @@ data class AnimeAV1Source(
     val isDub: Boolean = false,
     val quality: String = "1080p",
 ) {
-    val isUpn: Boolean get() = server.equals("UPNShare", ignoreCase = true) || embedUrl.contains("uns.bio", ignoreCase = true)
+    val isUpn: Boolean get() = server.equals("UPNShare", ignoreCase = true) ||
+        embedUrl.contains("uns.bio", ignoreCase = true) ||
+        embedUrl.contains("turboembed.", ignoreCase = true)
 
     val isMp4Upload: Boolean get() = server.equals("MP4Upload", ignoreCase = true) || embedUrl.contains("mp4upload.com", ignoreCase = true)
 
