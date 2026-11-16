@@ -34,7 +34,7 @@ fun YokanTheme(
         useDynamicTheme = false,
         useBlackBackground = true,
         enableFrostedGlassEffect = true,
-        seedColorValue = Color(0xFF6750A4).value,
+        seedColorValue = Color(0xFF7EBBED).value,
     )
     val hazeState = rememberHazeState()
     val platformFont = rememberPlatformFontFamily(null)
