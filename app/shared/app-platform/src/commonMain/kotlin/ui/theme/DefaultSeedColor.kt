@@ -13,6 +13,6 @@ import androidx.compose.ui.graphics.Color
 
 // region Note: You should only add UI properties when it is accessed both `ui-foundation` and `app-data`
 
-val DefaultSeedColor = Color(0xFF7EBBED)
+val DefaultSeedColor = Color(0xFF4F378B)
 
 // endregion
