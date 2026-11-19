@@ -36,7 +36,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Close
@@ -737,10 +736,6 @@ fun HomeScreen(
                                 }
                             }
 
-                            if (onOpenSchedule != null) {
-                                ScheduleBannerCard(onClick = onOpenSchedule)
-                            }
-
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Text(
                                     text = "Explorar por género",
@@ -890,15 +885,6 @@ fun HomeScreen(
                             onAnimeClick = onAnimeClick,
                             modifier = Modifier.padding(bottom = 8.dp),
                         )
-                    }
-
-                    if (onOpenSchedule != null) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            ScheduleBannerCard(
-                                onClick = onOpenSchedule,
-                                modifier = Modifier.padding(bottom = 8.dp),
-                            )
-                        }
                     }
 
                     // "Continuar viendo" section
@@ -1099,63 +1085,6 @@ fun HomeScreen(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ScheduleBannerCard(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.CalendarMonth,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Horario semanal",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "Estrenos de hoy y programación de la semana",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
-                contentDescription = "Abrir horario",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
         }
     }
 }
