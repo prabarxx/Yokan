@@ -324,6 +324,33 @@ fun SettingsScreen(
                         checked = settings.autoPlayNextEpisode,
                         onCheckedChange = { settingsManager.setAutoPlayNextEpisode(it) },
                     )
+
+                    SettingsDivider()
+
+                    SettingsSwitchRow(
+                        title = "Imagen en imagen (PiP)",
+                        subtitle = "Continúa viendo en ventana flotante al salir de la app durante la reproducción",
+                        checked = settings.enablePip,
+                        onCheckedChange = { settingsManager.setEnablePip(it) },
+                    )
+
+                    SettingsDivider()
+
+                    SettingsSwitchRow(
+                        title = "Auto-saltar Opening (AniSkip)",
+                        subtitle = "Salta automáticamente el Opening cuando AniSkip detecta sus marcas de tiempo",
+                        checked = settings.autoSkipIntro,
+                        onCheckedChange = { settingsManager.setAutoSkipIntro(it) },
+                    )
+
+                    SettingsDivider()
+
+                    SettingsSwitchRow(
+                        title = "Auto-saltar Ending (AniSkip)",
+                        subtitle = "Salta automáticamente el Ending cuando AniSkip detecta sus marcas de tiempo",
+                        checked = settings.autoSkipOutro,
+                        onCheckedChange = { settingsManager.setAutoSkipOutro(it) },
+                    )
                 }
             }
 

@@ -1,12 +1,18 @@
 package app.yokan.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -25,11 +31,16 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
@@ -38,6 +49,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -50,7 +62,9 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
@@ -87,9 +101,11 @@ import app.yokan.anilist.client.AniListClient
 import app.yokan.anilist.model.AniListMedia
 import app.yokan.media.WatchHistoryManager
 import app.yokan.media.WatchProgress
+import app.yokan.settings.YokanSettingsManager
 import app.yokan.ui.components.AnimePosterCard
 import app.yokan.ui.components.TrendingCarousel
 import app.yokan.ui.state.HomeCache
+import java.util.Calendar
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.isActive
@@ -103,18 +119,52 @@ import me.him188.ani.app.ui.foundation.theme.LocalAppChromeOverlayInsets
 import me.him188.ani.app.ui.foundation.theme.appChromeHazeSource
 import me.him188.ani.app.ui.subject.SubjectGridDefaults
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+private val GENRE_OPTIONS: List<Pair<String, String>> = listOf(
+    "Action" to "Acción",
+    "Adventure" to "Aventura",
+    "Comedy" to "Comedia",
+    "Drama" to "Drama",
+    "Fantasy" to "Fantasía",
+    "Horror" to "Horror",
+    "Mecha" to "Mecha",
+    "Mystery" to "Misterio",
+    "Psychological" to "Psicológico",
+    "Romance" to "Romance",
+    "Sci-Fi" to "Ciencia Ficción",
+    "Slice of Life" to "Slice of Life",
+    "Sports" to "Deportes",
+    "Supernatural" to "Sobrenatural",
+    "Thriller" to "Suspenso",
+)
+
+private fun currentAnimeSeasonAndYear(): Pair<String, Int> {
+    val cal = Calendar.getInstance()
+    val month = cal.get(Calendar.MONTH) // 0 = Jan
+    val year = cal.get(Calendar.YEAR)
+    val season = when (month) {
+        in 0..2 -> "WINTER"
+        in 3..5 -> "SPRING"
+        in 6..8 -> "SUMMER"
+        else -> "FALL"
+    }
+    return season to year
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(
     aniListClient: AniListClient,
     onAnimeClick: (AniListMedia) -> Unit,
     onEpisodeClick: ((AniListMedia, Int) -> Unit)? = null,
+    onOpenSchedule: (() -> Unit)? = null,
     isSearchTab: Boolean = false,
     onSearchModeChange: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
+    val settingsManager = remember { YokanSettingsManager.getInstance(context) }
     val watchHistory by watchHistoryManager.allHistory.collectAsState()
+    val recentSearches by settingsManager.recentSearches.collectAsState()
 
     var trendingList by remember { mutableStateOf(HomeCache.trendingList) }
     var popularList by remember { mutableStateOf(HomeCache.popularList) }
@@ -129,6 +179,11 @@ fun HomeScreen(
 
     var isSearching by remember { mutableStateOf(isSearchTab || HomeCache.isSearching) }
     var searchQuery by remember { mutableStateOf(HomeCache.searchQuery) }
+    var selectedGenre by remember { mutableStateOf(HomeCache.searchGenre) }
+    var selectedFormat by remember { mutableStateOf(HomeCache.searchFormat) }
+    var selectedStatus by remember { mutableStateOf(HomeCache.searchStatus) }
+    var selectedSort by remember { mutableStateOf(HomeCache.searchSort) }
+    var currentSeasonOnly by remember { mutableStateOf(HomeCache.searchCurrentSeasonOnly) }
     var isLoading by remember { mutableStateOf(!HomeCache.isLoaded) }
     var isSearchLoading by remember { mutableStateOf(false) }
 
@@ -193,14 +248,102 @@ fun HomeScreen(
         }
     }
 
-    /** Carga la siguiente página de resultados de búsqueda al hacer scroll infinito */
+    val hasActiveFilters = selectedGenre != null ||
+        selectedFormat != null ||
+        selectedStatus != null ||
+        selectedSort != null ||
+        currentSeasonOnly
+    val hasActiveSearch = searchQuery.isNotBlank() || hasActiveFilters
+
+    /** Ejecuta búsqueda o exploración filtrada en AniList con debounce opcional */
+    fun executeDiscoverySearch(
+        query: String = searchQuery,
+        genre: String? = selectedGenre,
+        format: String? = selectedFormat,
+        status: String? = selectedStatus,
+        sort: String? = selectedSort,
+        seasonOnly: Boolean = currentSeasonOnly,
+        debounceMs: Long = 0L,
+    ) {
+        searchQuery = query
+        selectedGenre = genre
+        selectedFormat = format
+        selectedStatus = status
+        selectedSort = sort
+        currentSeasonOnly = seasonOnly
+
+        HomeCache.searchQuery = query
+        HomeCache.searchGenre = genre
+        HomeCache.searchFormat = format
+        HomeCache.searchStatus = status
+        HomeCache.searchSort = sort
+        HomeCache.searchCurrentSeasonOnly = seasonOnly
+
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        val anyActive = trimmed.isNotBlank() || genre != null || format != null || status != null || sort != null || seasonOnly
+        if (!anyActive) {
+            searchResults = emptyList()
+            searchPage = 1
+            hasMoreSearch = true
+            HomeCache.searchResults = emptyList()
+            HomeCache.searchPage = 1
+            HomeCache.hasMoreSearch = true
+            isSearchLoading = false
+            return
+        }
+
+        val (seasonName, seasonYear) = if (seasonOnly) currentAnimeSeasonAndYear() else (null to null)
+        isSearchLoading = true
+        searchJob = coroutineScope.launch {
+            if (debounceMs > 0L) delay(debounceMs)
+            val res = aniListClient.discoverAnime(
+                searchQuery = trimmed.takeIf { it.isNotBlank() },
+                genre = genre,
+                format = format,
+                status = status,
+                season = seasonName,
+                seasonYear = seasonYear,
+                sort = sort,
+                page = 1,
+                perPage = 30,
+            )
+            res.onSuccess {
+                searchResults = it
+                searchPage = 1
+                hasMoreSearch = it.size >= 30
+                HomeCache.searchResults = it
+                HomeCache.searchPage = 1
+                HomeCache.hasMoreSearch = hasMoreSearch
+                isSearchLoading = false
+            }.onFailure {
+                if (isActive) {
+                    isSearchLoading = false
+                    snackbarHostState.showSnackbar("No se pudo buscar. Revisa tu conexión.")
+                }
+            }
+        }
+    }
+
+    /** Carga la siguiente página de resultados de búsqueda/filtros al hacer scroll infinito */
     fun loadNextSearchPage() {
         val query = searchQuery.trim()
-        if (isLoadingMoreSearch || !hasMoreSearch || isSearchLoading || query.isBlank()) return
+        if (isLoadingMoreSearch || !hasMoreSearch || isSearchLoading || !hasActiveSearch) return
         isLoadingMoreSearch = true
+        val (seasonName, seasonYear) = if (currentSeasonOnly) currentAnimeSeasonAndYear() else (null to null)
         coroutineScope.launch {
             val nextPage = searchPage + 1
-            val res = aniListClient.searchAnime(query, nextPage, 30)
+            val res = aniListClient.discoverAnime(
+                searchQuery = query.takeIf { it.isNotBlank() },
+                genre = selectedGenre,
+                format = selectedFormat,
+                status = selectedStatus,
+                season = seasonName,
+                seasonYear = seasonYear,
+                sort = selectedSort,
+                page = nextPage,
+                perPage = 30,
+            )
             res.onSuccess { newItems ->
                 if (newItems.isNotEmpty()) {
                     val existingIds = searchResults.map { it.id }.toSet()
@@ -245,7 +388,7 @@ fun HomeScreen(
     }
 
     LaunchedEffect(shouldLoadMoreSearch.value) {
-        if (shouldLoadMoreSearch.value && !isLoadingMoreSearch && hasMoreSearch && !isSearchLoading && searchQuery.isNotBlank()) {
+        if (shouldLoadMoreSearch.value && !isLoadingMoreSearch && hasMoreSearch && !isSearchLoading && hasActiveSearch) {
             loadNextSearchPage()
         }
     }
@@ -350,41 +493,9 @@ fun HomeScreen(
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { query ->
-                                searchQuery = query
-                                HomeCache.searchQuery = query
-                                searchJob?.cancel()
-                                if (query.isNotBlank()) {
-                                    isSearchLoading = true
-                                    searchJob = coroutineScope.launch {
-                                        delay(350)
-                                        val res = aniListClient.searchAnime(query, 1, 30)
-                                        res.onSuccess {
-                                            searchResults = it
-                                            searchPage = 1
-                                            hasMoreSearch = it.size >= 30
-                                            HomeCache.searchResults = it
-                                            HomeCache.searchPage = 1
-                                            HomeCache.hasMoreSearch = hasMoreSearch
-                                            isSearchLoading = false
-                                        }.onFailure {
-                                            // isActive: el cliente puede devolver Failure si esta búsqueda fue cancelada por otra
-                                            if (isActive) {
-                                                isSearchLoading = false
-                                                snackbarHostState.showSnackbar("No se pudo buscar. Revisa tu conexión.")
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    searchResults = emptyList()
-                                    searchPage = 1
-                                    hasMoreSearch = true
-                                    HomeCache.searchResults = emptyList()
-                                    HomeCache.searchPage = 1
-                                    HomeCache.hasMoreSearch = true
-                                    isSearchLoading = false
-                                }
+                                executeDiscoverySearch(query = query, debounceMs = 350L)
                             },
-                            placeholder = { Text("Buscar anime...") },
+                            placeholder = { Text("Buscar anime o filtrar...") },
                             singleLine = true,
                             shape = RoundedCornerShape(24.dp),
                             colors = OutlinedTextFieldDefaults.colors(
@@ -406,19 +517,27 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    if (!isSearching && onOpenSchedule != null) {
+                        IconButton(onClick = onOpenSchedule) {
+                            Icon(
+                                imageVector = Icons.Rounded.CalendarMonth,
+                                contentDescription = "Horario semanal",
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = {
                             val newMode = !isSearching
                             setSearching(newMode)
                             if (!newMode) {
-                                searchQuery = ""
-                                searchResults = emptyList()
-                                searchPage = 1
-                                hasMoreSearch = true
-                                HomeCache.searchQuery = ""
-                                HomeCache.searchResults = emptyList()
-                                HomeCache.searchPage = 1
-                                HomeCache.hasMoreSearch = true
+                                executeDiscoverySearch(
+                                    query = "",
+                                    genre = null,
+                                    format = null,
+                                    status = null,
+                                    sort = null,
+                                    seasonOnly = false,
+                                )
                             }
                         }
                     ) {
@@ -455,59 +574,272 @@ fun HomeScreen(
         }
 
         if (isSearching) {
-            if (isSearchLoading) {
-                Box(
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
+                // Barra rápida de filtros
+                Row(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CircularProgressIndicator()
-                }
-            } else if (searchQuery.isNotBlank() && searchResults.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "No se encontraron animes para \"$searchQuery\"",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    FilterChip(
+                        selected = currentSeasonOnly,
+                        onClick = {
+                            executeDiscoverySearch(seasonOnly = !currentSeasonOnly)
+                        },
+                        label = { Text("Temporada", fontSize = 12.sp) },
                     )
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = layoutParams.gridCells,
-                    state = searchGridState,
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
-                    horizontalArrangement = layoutParams.horizontalArrangement,
-                    verticalArrangement = layoutParams.verticalArrangement,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .appChromeHazeSource(MaterialTheme.colorScheme.background)
-                        .padding(padding),
-                ) {
-                    items(searchResults, key = { it.id }) { anime ->
-                        AnimePosterCard(
-                            anime = anime,
-                            onClick = { onAnimeClick(anime) }
+                    FilterChip(
+                        selected = selectedStatus == "RELEASING",
+                        onClick = {
+                            executeDiscoverySearch(
+                                status = if (selectedStatus == "RELEASING") null else "RELEASING",
+                            )
+                        },
+                        label = { Text("En emisión", fontSize = 12.sp) },
+                    )
+                    FilterChip(
+                        selected = selectedSort == "SCORE_DESC",
+                        onClick = {
+                            executeDiscoverySearch(
+                                sort = if (selectedSort == "SCORE_DESC") null else "SCORE_DESC",
+                            )
+                        },
+                        label = { Text("Mejor nota", fontSize = 12.sp) },
+                    )
+                    FilterChip(
+                        selected = selectedFormat == "TV",
+                        onClick = {
+                            executeDiscoverySearch(
+                                format = if (selectedFormat == "TV") null else "TV",
+                            )
+                        },
+                        label = { Text("Series TV", fontSize = 12.sp) },
+                    )
+                    FilterChip(
+                        selected = selectedFormat == "MOVIE",
+                        onClick = {
+                            executeDiscoverySearch(
+                                format = if (selectedFormat == "MOVIE") null else "MOVIE",
+                            )
+                        },
+                        label = { Text("Películas", fontSize = 12.sp) },
+                    )
+                    selectedGenre?.let { genreKey ->
+                        val genreLabel = GENRE_OPTIONS.firstOrNull { it.first == genreKey }?.second ?: genreKey
+                        FilterChip(
+                            selected = true,
+                            onClick = { executeDiscoverySearch(genre = null) },
+                            label = { Text(genreLabel, fontSize = 12.sp) },
+                            trailingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Quitar género",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
                         )
                     }
-
-                    if (isLoadingMoreSearch) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(28.dp),
-                                    strokeWidth = 2.5.dp,
-                                    color = MaterialTheme.colorScheme.primary,
+                    if (hasActiveFilters) {
+                        TextButton(
+                            onClick = {
+                                executeDiscoverySearch(
+                                    genre = null,
+                                    format = null,
+                                    status = null,
+                                    sort = null,
+                                    seasonOnly = false,
                                 )
+                            },
+                        ) {
+                            Text("Limpiar", fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                when {
+                    !hasActiveSearch -> {
+                        // Vista de descubrimiento antes de escribir: recientes, atajos y géneros
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .appChromeHazeSource(MaterialTheme.colorScheme.background)
+                                .verticalScroll(rememberScrollState())
+                                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
+                            verticalArrangement = Arrangement.spacedBy(20.dp),
+                        ) {
+                            if (recentSearches.isNotEmpty()) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "Búsquedas recientes",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        TextButton(onClick = { settingsManager.clearRecentSearches() }) {
+                                            Text("Borrar todo", fontSize = 12.sp)
+                                        }
+                                    }
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        recentSearches.forEach { term ->
+                                            Surface(
+                                                onClick = { executeDiscoverySearch(query = term) },
+                                                shape = RoundedCornerShape(50),
+                                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                                                ),
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.History,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(15.dp),
+                                                    )
+                                                    Text(
+                                                        text = term,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                    )
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Close,
+                                                        contentDescription = "Eliminar búsqueda",
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier
+                                                            .size(16.dp)
+                                                            .clip(CircleShape)
+                                                            .clickable { settingsManager.removeRecentSearch(term) },
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (onOpenSchedule != null) {
+                                ScheduleBannerCard(onClick = onOpenSchedule)
+                            }
+
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text(
+                                    text = "Explorar por género",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    GENRE_OPTIONS.forEach { (apiKey, label) ->
+                                        Surface(
+                                            onClick = { executeDiscoverySearch(genre = apiKey) },
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                            border = BorderStroke(
+                                                1.dp,
+                                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                                            ),
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    isSearchLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                    }
+
+                    searchResults.isEmpty() -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = if (searchQuery.isNotBlank()) {
+                                    "No se encontraron animes para \"$searchQuery\""
+                                } else {
+                                    "No hay resultados para los filtros seleccionados"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+
+                    else -> {
+                        LazyVerticalGrid(
+                            columns = layoutParams.gridCells,
+                            state = searchGridState,
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
+                            horizontalArrangement = layoutParams.horizontalArrangement,
+                            verticalArrangement = layoutParams.verticalArrangement,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .appChromeHazeSource(MaterialTheme.colorScheme.background),
+                        ) {
+                            items(searchResults, key = { it.id }) { anime ->
+                                AnimePosterCard(
+                                    anime = anime,
+                                    onClick = {
+                                        if (searchQuery.isNotBlank()) {
+                                            settingsManager.addRecentSearch(searchQuery)
+                                        }
+                                        onAnimeClick(anime)
+                                    }
+                                )
+                            }
+
+                            if (isLoadingMoreSearch) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(28.dp),
+                                            strokeWidth = 2.5.dp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -556,8 +888,17 @@ fun HomeScreen(
                         TrendingCarousel(
                             trendingList = trendingList,
                             onAnimeClick = onAnimeClick,
-                            modifier = Modifier.padding(bottom = 12.dp),
+                            modifier = Modifier.padding(bottom = 8.dp),
                         )
+                    }
+
+                    if (onOpenSchedule != null) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            ScheduleBannerCard(
+                                onClick = onOpenSchedule,
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                        }
                     }
 
                     // "Continuar viendo" section
@@ -758,6 +1099,63 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleBannerCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.CalendarMonth,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Horario semanal",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Estrenos de hoy y programación de la semana",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = "Abrir horario",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }

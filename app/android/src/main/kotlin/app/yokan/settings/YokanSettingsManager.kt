@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import me.him188.ani.app.data.models.preference.DarkMode
 import me.him188.ani.app.data.models.preference.ThemeSettings
 import me.him188.ani.app.videoplayer.videoenhancement.VideoEnhancementMode
+import org.json.JSONArray
 
 data class SeedColorPreset(
     val name: String,
@@ -30,6 +31,9 @@ data class YokanSettings(
     val videoEnhancementMode: VideoEnhancementMode = VideoEnhancementMode.OFF,
     val skipIntroSeconds: Int = DEFAULT_SKIP_INTRO_SECONDS,
     val autoPlayNextEpisode: Boolean = true,
+    val enablePip: Boolean = true,
+    val autoSkipIntro: Boolean = false,
+    val autoSkipOutro: Boolean = false,
     val torrentDownloadLimitBytes: Int = 0,
     val torrentUploadLimitBytes: Int = 0,
 ) {
@@ -88,6 +92,47 @@ class YokanSettingsManager private constructor(context: Context) {
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<YokanSettings> = _settings.asStateFlow()
 
+    private val _recentSearches = MutableStateFlow(loadRecentSearches())
+    val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
+
+    private fun loadRecentSearches(): List<String> {
+        val raw = prefs.getString(KEY_RECENT_SEARCHES, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length())
+                .mapNotNull { arr.optString(it)?.trim()?.takeIf { s -> s.isNotBlank() } }
+                .take(MAX_RECENT_SEARCHES)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun persistRecentSearches(items: List<String>) {
+        _recentSearches.value = items
+        ioScope.launch {
+            runCatching {
+                val arr = JSONArray()
+                items.forEach { arr.put(it) }
+                prefs.edit().putString(KEY_RECENT_SEARCHES, arr.toString()).apply()
+            }
+        }
+    }
+
+    fun addRecentSearch(query: String) {
+        val clean = query.trim()
+        if (clean.length < 2) return
+        val updated = listOf(clean) + _recentSearches.value
+            .filterNot { it.equals(clean, ignoreCase = true) }
+        persistRecentSearches(updated.take(MAX_RECENT_SEARCHES))
+    }
+
+    fun removeRecentSearch(query: String) {
+        val updated = _recentSearches.value.filterNot { it.equals(query, ignoreCase = true) }
+        persistRecentSearches(updated)
+    }
+
+    fun clearRecentSearches() {
+        persistRecentSearches(emptyList())
+    }
+
     private fun loadSettings(): YokanSettings {
         val darkMode = when (prefs.getString(KEY_DARK_MODE, "DARK")) {
             "AUTO" -> DarkMode.AUTO
@@ -114,6 +159,9 @@ class YokanSettingsManager private constructor(context: Context) {
             videoEnhancementMode = enhancementMode,
             skipIntroSeconds = skipIntro,
             autoPlayNextEpisode = prefs.getBoolean(KEY_AUTO_PLAY_NEXT, true),
+            enablePip = prefs.getBoolean(KEY_ENABLE_PIP, true),
+            autoSkipIntro = prefs.getBoolean(KEY_AUTO_SKIP_INTRO, false),
+            autoSkipOutro = prefs.getBoolean(KEY_AUTO_SKIP_OUTRO, false),
             torrentDownloadLimitBytes = prefs.getInt(KEY_TORRENT_DOWNLOAD_LIMIT, 0).coerceAtLeast(0),
             torrentUploadLimitBytes = prefs.getInt(KEY_TORRENT_UPLOAD_LIMIT, 0).coerceAtLeast(0),
         )
@@ -147,6 +195,9 @@ class YokanSettingsManager private constructor(context: Context) {
                 .putString(KEY_VIDEO_ENHANCEMENT, enhancementToken)
                 .putInt(KEY_SKIP_INTRO_SECONDS, toSave.skipIntroSeconds)
                 .putBoolean(KEY_AUTO_PLAY_NEXT, toSave.autoPlayNextEpisode)
+                .putBoolean(KEY_ENABLE_PIP, toSave.enablePip)
+                .putBoolean(KEY_AUTO_SKIP_INTRO, toSave.autoSkipIntro)
+                .putBoolean(KEY_AUTO_SKIP_OUTRO, toSave.autoSkipOutro)
                 .putInt(KEY_TORRENT_DOWNLOAD_LIMIT, toSave.torrentDownloadLimitBytes)
                 .putInt(KEY_TORRENT_UPLOAD_LIMIT, toSave.torrentUploadLimitBytes)
                 .apply()
@@ -173,6 +224,12 @@ class YokanSettingsManager private constructor(context: Context) {
 
     fun setAutoPlayNextEpisode(enabled: Boolean) = updateAndPersist { it.copy(autoPlayNextEpisode = enabled) }
 
+    fun setEnablePip(enabled: Boolean) = updateAndPersist { it.copy(enablePip = enabled) }
+
+    fun setAutoSkipIntro(enabled: Boolean) = updateAndPersist { it.copy(autoSkipIntro = enabled) }
+
+    fun setAutoSkipOutro(enabled: Boolean) = updateAndPersist { it.copy(autoSkipOutro = enabled) }
+
     fun setTorrentDownloadLimitBytes(bytesPerSec: Int) = updateAndPersist {
         it.copy(torrentDownloadLimitBytes = bytesPerSec.coerceAtLeast(0))
     }
@@ -193,8 +250,13 @@ class YokanSettingsManager private constructor(context: Context) {
         private const val KEY_VIDEO_ENHANCEMENT = "video_enhancement_mode"
         private const val KEY_SKIP_INTRO_SECONDS = "skip_intro_seconds"
         private const val KEY_AUTO_PLAY_NEXT = "auto_play_next_episode"
+        private const val KEY_ENABLE_PIP = "enable_pip"
+        private const val KEY_AUTO_SKIP_INTRO = "auto_skip_intro"
+        private const val KEY_AUTO_SKIP_OUTRO = "auto_skip_outro"
         private const val KEY_TORRENT_DOWNLOAD_LIMIT = "torrent_download_limit_bytes"
         private const val KEY_TORRENT_UPLOAD_LIMIT = "torrent_upload_limit_bytes"
+        private const val KEY_RECENT_SEARCHES = "recent_searches_json"
+        private const val MAX_RECENT_SEARCHES = 10
 
         @Volatile
         private var instance: YokanSettingsManager? = null

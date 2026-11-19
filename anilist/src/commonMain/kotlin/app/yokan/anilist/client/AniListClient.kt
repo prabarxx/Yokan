@@ -1,5 +1,6 @@
 package app.yokan.anilist.client
 
+import app.yokan.anilist.model.AniListAiringItem
 import app.yokan.anilist.model.AniListCoverImage
 import app.yokan.anilist.model.AniListMedia
 import app.yokan.anilist.model.AniListRelation
@@ -18,6 +19,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -46,6 +50,7 @@ class AniListClient(
                   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
                     media(type: ANIME, sort: TRENDING_DESC) {
                       id
+                      idMal
                       title {
                         romaji
                         english
@@ -87,6 +92,7 @@ class AniListClient(
                   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
                     media(type: ANIME, sort: POPULARITY_DESC) {
                       id
+                      idMal
                       title {
                         romaji
                         english
@@ -128,6 +134,7 @@ class AniListClient(
                   Page(page: ${'$'}page, perPage: ${'$'}perPage) {
                     media(search: ${'$'}search, type: ANIME, sort: SEARCH_MATCH) {
                       id
+                      idMal
                       title {
                         romaji
                         english
@@ -163,12 +170,195 @@ class AniListClient(
         }
     }
 
+    /**
+     * Búsqueda y exploración filtrada por texto, género, formato, estado, temporada y orden.
+     */
+    suspend fun discoverAnime(
+        searchQuery: String? = null,
+        genre: String? = null,
+        format: String? = null,
+        status: String? = null,
+        season: String? = null,
+        seasonYear: Int? = null,
+        sort: String? = null,
+        page: Int = 1,
+        perPage: Int = 30,
+    ): Result<List<AniListMedia>> = withContext(Dispatchers.IO_) {
+        runSuspendCatching {
+            val cleanQuery = searchQuery?.trim()?.takeIf { it.isNotBlank() }
+            val effectiveSort = sort?.takeIf { it.isNotBlank() }
+                ?: if (cleanQuery != null) "SEARCH_MATCH" else "POPULARITY_DESC"
+
+            val query = """
+                query (
+                  ${'$'}page: Int,
+                  ${'$'}perPage: Int,
+                  ${'$'}search: String,
+                  ${'$'}genre: String,
+                  ${'$'}format: MediaFormat,
+                  ${'$'}status: MediaStatus,
+                  ${'$'}season: MediaSeason,
+                  ${'$'}seasonYear: Int,
+                  ${'$'}sort: [MediaSort]
+                ) {
+                  Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+                    media(
+                      type: ANIME,
+                      isAdult: false,
+                      search: ${'$'}search,
+                      genre: ${'$'}genre,
+                      format: ${'$'}format,
+                      status: ${'$'}status,
+                      season: ${'$'}season,
+                      seasonYear: ${'$'}seasonYear,
+                      sort: ${'$'}sort
+                    ) {
+                      id
+                      idMal
+                      title {
+                        romaji
+                        english
+                        native
+                      }
+                      coverImage {
+                        extraLarge
+                        large
+                        medium
+                      }
+                      bannerImage
+                      description(asHtml: false)
+                      episodes
+                      averageScore
+                      genres
+                      status
+                      season
+                      seasonYear
+                      format
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val variables = buildJsonObject {
+                put("page", page)
+                put("perPage", perPage)
+                cleanQuery?.let { put("search", it) }
+                genre?.takeIf { it.isNotBlank() }?.let { put("genre", it) }
+                format?.takeIf { it.isNotBlank() }?.let { put("format", it) }
+                status?.takeIf { it.isNotBlank() }?.let { put("status", it) }
+                season?.takeIf { it.isNotBlank() }?.let { put("season", it) }
+                seasonYear?.takeIf { it > 0 }?.let { put("seasonYear", it) }
+                put("sort", buildJsonArray { add(JsonPrimitive(effectiveSort)) })
+            }
+
+            executeQuery(query, variables) { root ->
+                val mediaArray = root["data"]?.jsonObject?.get("Page")?.jsonObject?.get("media")?.jsonArray
+                    ?: return@executeQuery emptyList()
+                mediaArray.mapNotNull { parseMediaItem(it) }
+            }
+        }
+    }
+
+    /**
+     * Obtiene el calendario de episodios emitidos y por emitir en un rango Unix (segundos).
+     */
+    suspend fun fetchAiringSchedule(
+        startEpochSeconds: Long,
+        endEpochSeconds: Long,
+        maxPages: Int = 4,
+    ): Result<List<AniListAiringItem>> = withContext(Dispatchers.IO_) {
+        runSuspendCatching {
+            val query = """
+                query (${'$'}page: Int, ${'$'}perPage: Int, ${'$'}start: Int, ${'$'}end: Int) {
+                  Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+                    pageInfo {
+                      hasNextPage
+                    }
+                    airingSchedules(airingAt_greater: ${'$'}start, airingAt_lesser: ${'$'}end, sort: TIME) {
+                      id
+                      episode
+                      airingAt
+                      media {
+                        id
+                        idMal
+                        type
+                        isAdult
+                        format
+                        status
+                        episodes
+                        averageScore
+                        genres
+                        season
+                        seasonYear
+                        title {
+                          romaji
+                          english
+                          native
+                        }
+                        coverImage {
+                          extraLarge
+                          large
+                          medium
+                        }
+                        bannerImage
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val collected = mutableListOf<AniListAiringItem>()
+            var page = 1
+            while (page <= maxPages) {
+                val variables = buildJsonObject {
+                    put("page", page)
+                    put("perPage", 50)
+                    put("start", startEpochSeconds)
+                    put("end", endEpochSeconds)
+                }
+
+                val (pageItems, hasNext) = executeQuery(query, variables) { root ->
+                    val pageObj = root["data"]?.jsonObject?.get("Page")?.jsonObject
+                        ?: return@executeQuery emptyList<AniListAiringItem>() to false
+                    val hasNextPage = pageObj["pageInfo"]?.jsonObject?.get("hasNextPage")?.jsonPrimitive?.booleanOrNull == true
+                    val schedules = pageObj["airingSchedules"]?.jsonArray ?: return@executeQuery emptyList<AniListAiringItem>() to false
+
+                    val parsed = schedules.mapNotNull { elem ->
+                        val schedObj = elem.jsonObject
+                        val schedId = schedObj["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+                        val ep = schedObj["episode"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+                        val airingAt = schedObj["airingAt"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null
+                        val mediaObj = schedObj["media"] as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+                        if (mediaObj["isAdult"]?.jsonPrimitive?.booleanOrNull == true) return@mapNotNull null
+                        val mediaType = mediaObj["type"]?.jsonPrimitive?.contentOrNull
+                        if (mediaType != null && mediaType != "ANIME") return@mapNotNull null
+                        val media = parseMediaItem(mediaObj) ?: return@mapNotNull null
+                        AniListAiringItem(
+                            scheduleId = schedId,
+                            episode = ep,
+                            airingAt = airingAt,
+                            media = media,
+                        )
+                    }
+                    parsed to hasNextPage
+                }
+
+                collected.addAll(pageItems)
+                if (!hasNext) break
+                page++
+            }
+
+            collected.distinctBy { it.scheduleId }.sortedBy { it.airingAt }
+        }
+    }
+
     suspend fun getAnimeDetails(id: Int): Result<AniListMedia> = withContext(Dispatchers.IO_) {
         runSuspendCatching {
             val query = """
                 query (${'$'}id: Int) {
                   Media(id: ${'$'}id, type: ANIME) {
                     id
+                    idMal
                     title {
                       romaji
                       english
@@ -319,6 +509,7 @@ class AniListClient(
     private fun parseMediaItem(element: JsonElement): AniListMedia? {
         val obj = element.jsonObject
         val id = obj["id"]?.jsonPrimitive?.intOrNull ?: return null
+        val idMal = obj["idMal"]?.jsonPrimitive?.intOrNull
 
         val titleObj = obj["title"]?.jsonObject
         val title = AniListTitle(
@@ -502,6 +693,7 @@ class AniListClient(
             favourites = favourites,
             studios = studios,
             recommendations = recommendations,
+            idMal = idMal,
         )
     }
 }

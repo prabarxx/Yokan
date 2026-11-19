@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -58,6 +59,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -88,6 +92,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import android.net.Uri
 import android.widget.Toast
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -97,12 +103,15 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import app.yokan.datasource.animeav1.WebStreamSource
+import app.yokan.datasource.aniskip.AniSkipClient
+import app.yokan.datasource.aniskip.SkipSegment
 import app.yokan.datasource.nyaa.EpisodeNumberMatcher
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
 import app.yokan.media.WatchHistoryManager
 import app.yokan.settings.YokanSettingsManager
+import app.yokan.ui.LocalPipController
 import app.yokan.anilist.model.AniListMedia
 import org.openani.mediamp.MediaStatus
 import me.him188.ani.app.videoplayer.ui.progress.PlayerProgressSliderState
@@ -184,6 +193,7 @@ import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.audioTracks
+import org.openani.mediamp.features.chapters
 import org.openani.mediamp.features.subtitleTracks
 import org.openani.mediamp.togglePlayWhenReady
 import kotlin.math.abs
@@ -248,6 +258,7 @@ fun VideoPlayerScreen(
     animeForHistory: AniListMedia? = null,
     episodeTitle: String? = null,
     hasBothLanguages: Boolean = false,
+    aniSkipClient: AniSkipClient? = null,
     isFullscreen: Boolean? = null,
     onFullscreenChange: ((Boolean) -> Unit)? = null,
     maintainAspectRatio: Boolean? = null,
@@ -272,6 +283,9 @@ fun VideoPlayerScreen(
     val settingsManager = remember { YokanSettingsManager.getInstance(context) }
     val appSettings by settingsManager.settings.collectAsState()
     val currentAutoPlayNext by rememberUpdatedState(appSettings.autoPlayNextEpisode)
+    val pipController = LocalPipController.current
+    val isInPipMode = pipController.isInPipMode
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var loadingStatus by remember { mutableStateOf<String?>(if (torrent != null || webStream != null) "Cargando..." else null) }
@@ -510,9 +524,43 @@ fun VideoPlayerScreen(
         }
     )
 
-    // Sincroniza orientación horizontal / sistema bars exclusivamente con `effectiveFullscreen`
-    LaunchedEffect(effectiveFullscreen, activity) {
+    // Audio Focus + pausa automática al desconectar auriculares Bluetooth/cable
+    LaunchedEffect(exoPlayer) {
+        val exo = exoPlayer ?: return@LaunchedEffect
+        runCatching {
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build()
+            exo.setAudioAttributes(audioAttributes, true)
+            exo.setHandleAudioBecomingNoisy(true)
+        }
+    }
+
+    // Pausar cuando la actividad pasa a segundo plano sin PiP (ON_STOP no se dispara mientras PiP flota)
+    DisposableEffect(lifecycleOwner, exoPlayer, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (currentMediaData == null && exoPlayer != null) {
+                    if (exoPlayer.playWhenReady) {
+                        exoPlayer.playWhenReady = false
+                        exoPlayWhenReady = false
+                    }
+                } else if (player.state.value.playWhenReady) {
+                    runCatching { player.pause() }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // Sincroniza orientación horizontal / sistema bars exclusivamente con `effectiveFullscreen` (excepto en PiP)
+    LaunchedEffect(effectiveFullscreen, isInPipMode, activity) {
         val act = activity ?: return@LaunchedEffect
+        if (isInPipMode) return@LaunchedEffect
         val window = act.window
         val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
         if (effectiveFullscreen) {
@@ -1100,6 +1148,45 @@ fun VideoPlayerScreen(
         platformComponents.brightnessManager?.asLevelController() ?: NoOpLevelController
     }
 
+    // --- AniSkip (Opening / Ending / Recap) + capítulos embebidos en MKV ---
+    var aniSkipSegments by remember(player) { mutableStateOf<List<SkipSegment>>(emptyList()) }
+    val autoSkippedKeys = remember(player) { mutableSetOf<String>() }
+    val embeddedChaptersState = remember(player) {
+        player.chapters ?: flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+    val playerPositionMs by player.currentPositionMillis.collectAsState()
+
+    LaunchedEffect(aniSkipClient, animeForHistory?.idMal, episodeNumber) {
+        aniSkipSegments = emptyList()
+        autoSkippedKeys.clear()
+        val client = aniSkipClient ?: return@LaunchedEffect
+        val malId = animeForHistory?.idMal ?: return@LaunchedEffect
+        val ep = episodeNumber ?: return@LaunchedEffect
+        if (malId > 0 && ep > 0) {
+            aniSkipSegments = client.getSkipSegments(malId, ep)
+        }
+    }
+
+    val activeSkipSegment by remember(player) {
+        derivedStateOf {
+            val pos = if (exoPosition > 0L) exoPosition else playerPositionMs
+            if (pos <= 0L) return@derivedStateOf null
+            aniSkipSegments.firstOrNull { seg ->
+                pos >= seg.startMillis && pos < (seg.endMillis - 1_500L)
+            }
+        }
+    }
+
+    LaunchedEffect(activeSkipSegment?.key, appSettings.autoSkipIntro, appSettings.autoSkipOutro) {
+        val seg = activeSkipSegment ?: return@LaunchedEffect
+        val shouldAutoSkip = (seg.isOpening && appSettings.autoSkipIntro) ||
+            (seg.isEnding && appSettings.autoSkipOutro)
+        if (shouldAutoSkip && autoSkippedKeys.add(seg.key)) {
+            seekToEffective(seg.endMillis)
+            Toast.makeText(context, "${seg.type.label} saltado", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val progressSliderState = remember(player) {
         PlayerProgressSliderState(
             currentPositionMillis = {
@@ -1108,7 +1195,14 @@ fun VideoPlayerScreen(
             totalDurationMillis = {
                 if (exoDuration > 0L) exoDuration else (player.mediaProperties.value?.durationMillis ?: 0L)
             },
-            chapters = { emptyList() },
+            chapters = {
+                val embedded = embeddedChaptersState.value
+                if (embedded.isNotEmpty()) {
+                    embedded
+                } else {
+                    aniSkipSegments.map { it.toChapter() }
+                }
+            },
             onPreview = {},
             onPreviewFinished = { targetMs ->
                 seekToEffective(targetMs)
@@ -1202,21 +1296,38 @@ fun VideoPlayerScreen(
     val activeErrorMessage = errorMessage
         ?: if (activeWebStream == null && torrent == null) externalErrorMessage else null
 
+    val pipPlaybackActive = isEffectivelyPlaying && activeErrorMessage == null
+    LaunchedEffect(pipPlaybackActive, appSettings.enablePip) {
+        pipController.onUpdatePlaybackActive(pipPlaybackActive && appSettings.enablePip)
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            pipController.onUpdatePlaybackActive(false)
+        }
+    }
+    LaunchedEffect(isInPipMode) {
+        if (isInPipMode) {
+            showSettingsSheet = false
+            controllerState.toggleFullVisible(false)
+        }
+    }
+
     val outerModifier = modifier
         .fillMaxWidth()
         .background(Color.Black)
-        .then(if (effectiveFullscreen) Modifier.fillMaxSize() else Modifier.statusBarsPadding())
+        .then(if (effectiveFullscreen || isInPipMode) Modifier.fillMaxSize() else Modifier.statusBarsPadding())
 
     AniTheme(darkModeOverride = DarkMode.DARK) {
         Box(modifier = outerModifier) {
             VideoScaffold(
-                expanded = effectiveFullscreen,
-                modifier = if (effectiveFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
-                contentWindowInsets = resolvedWindowInsets,
-                maintainAspectRatio = resolvedMaintainAspectRatio,
+                expanded = effectiveFullscreen || isInPipMode,
+                modifier = if (effectiveFullscreen || isInPipMode) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+                contentWindowInsets = if (isInPipMode) WindowInsets(0) else resolvedWindowInsets,
+                maintainAspectRatio = if (isInPipMode) false else resolvedMaintainAspectRatio,
                 controllerState = controllerState,
-                gestureLocked = isLocked,
+                gestureLocked = isLocked || isInPipMode,
                 topBar = {
+                    if (!isInPipMode) {
                     PlayerTopBar(
                         title = {
                             if (effectiveFullscreen && animeForHistory != null) {
@@ -1269,6 +1380,15 @@ fun VideoPlayerScreen(
                                     )
                                 }
                             }
+                            if (pipController.isSupported && appSettings.enablePip && activeErrorMessage == null) {
+                                IconButton(onClick = { pipController.onEnterPip() }) {
+                                    Icon(
+                                        Icons.Rounded.PictureInPictureAlt,
+                                        contentDescription = "Imagen en imagen (PiP)",
+                                        tint = Color.White,
+                                    )
+                                }
+                            }
                             if (onChangeSource != null && (effectiveFullscreen || activeErrorMessage != null)) {
                                 IconButton(onClick = onChangeSource) {
                                     Icon(
@@ -1288,6 +1408,7 @@ fun VideoPlayerScreen(
                         },
                         windowInsets = WindowInsets(0),
                     )
+                    }
                 },
                 centerOverlay = {},
                 video = {
@@ -1339,7 +1460,7 @@ fun VideoPlayerScreen(
                     )
                 },
                 gestureLock = {
-                    if (effectiveFullscreen) {
+                    if (effectiveFullscreen && !isInPipMode) {
                         GestureLock(
                             isLocked = isLocked,
                             onClick = { isLocked = !isLocked },
@@ -1347,14 +1468,14 @@ fun VideoPlayerScreen(
                     }
                 },
                 playerStatsOverlay = {
-                    if (showPlayerStats) {
+                    if (showPlayerStats && !isInPipMode) {
                         PlayerStatsOverlay(playerStats)
                     }
                 },
                 floatingMessage = {
                     val status = activeLoadingStatus
                     val showBuffering = (activeWebStream != null || torrent != null) && isEffectivelyBuffering
-                    if (activeErrorMessage == null && (showBuffering || status != null)) {
+                    if (!isInPipMode && activeErrorMessage == null && (showBuffering || status != null)) {
                         VideoLoadingIndicator(
                             showProgress = true,
                             text = {
@@ -1370,7 +1491,7 @@ fun VideoPlayerScreen(
                     }
                 },
                 floatingBottomEnd = {
-                    if (!effectiveFullscreen) {
+                    if (!effectiveFullscreen && !isInPipMode) {
                         var showFloatingSwitch by remember { mutableStateOf(true) }
                         LaunchedEffect(Unit) {
                             delay(5.seconds)
@@ -1385,8 +1506,9 @@ fun VideoPlayerScreen(
                         }
                     }
                 },
-                rhsSheet = rhsSheet,
+                rhsSheet = { if (!isInPipMode) rhsSheet() },
                 bottomBar = {
+                    if (!isInPipMode) {
                     val sliderOnly = controllerState.visibility == ControllerVisibility.InlineSliderOnly
                     Column(
                         modifier = Modifier
@@ -1531,14 +1653,17 @@ fun VideoPlayerScreen(
 
                         renderProgressSlider(Modifier)
                     }
+                    }
                 },
                 detachedProgressSlider = {
-                    renderProgressSlider(Modifier.padding(horizontal = 12.dp))
+                    if (!isInPipMode) {
+                        renderProgressSlider(Modifier.padding(horizontal = 12.dp))
+                    }
                 },
             )
 
             // Panel compacto de ajustes del reproductor (Velocidad, Pantalla, Anime4K, Pistas, Estadísticas)
-            if (showSettingsSheet) {
+            if (showSettingsSheet && !isInPipMode) {
                 PlayerSettingsOverlay(
                     playbackSpeedControllerState = playbackSpeedControllerState,
                     videoAspectRatioControllerState = videoAspectRatioControllerState,
@@ -1564,8 +1689,53 @@ fun VideoPlayerScreen(
                 )
             }
 
+            // Botón flotante inteligente de AniSkip (Opening / Ending / Resumen)
+            val currentSkip = activeSkipSegment
+            if (!isInPipMode && currentSkip != null && nextEpisodeCountdown == null && activeErrorMessage == null) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .padding(
+                            end = if (effectiveFullscreen) 24.dp else 12.dp,
+                            bottom = if (effectiveFullscreen) 84.dp else 52.dp,
+                        ),
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    Surface(
+                        onClick = {
+                            autoSkippedKeys.add(currentSkip.key)
+                            seekToEffective(currentSkip.endMillis)
+                        },
+                        shape = RoundedCornerShape(50),
+                        color = Color(0xDD14141A),
+                        contentColor = Color.White,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
+                        shadowElevation = 6.dp,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.FastForward,
+                                contentDescription = currentSkip.type.buttonLabel,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = currentSkip.type.buttonLabel,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                            )
+                        }
+                    }
+                }
+            }
+
             // Cuenta regresiva para el siguiente episodio
-            nextEpisodeCountdown?.let { secondsLeft ->
+            if (!isInPipMode) nextEpisodeCountdown?.let { secondsLeft ->
                 Box(
                     modifier = Modifier
                         .matchParentSize()

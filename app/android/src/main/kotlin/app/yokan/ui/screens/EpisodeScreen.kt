@@ -100,9 +100,11 @@ import app.yokan.anilist.model.AniListMedia
 import app.yokan.anilist.model.AniListRelation
 import app.yokan.datasource.animeav1.AnimeAV1Client
 import app.yokan.datasource.animeav1.WebStreamSource
+import app.yokan.datasource.aniskip.AniSkipClient
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.WatchHistoryManager
+import app.yokan.ui.LocalPipController
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.app.ui.foundation.LongClickProgressFill
@@ -139,6 +141,7 @@ fun EpisodeScreen(
     aniListClient: AniListClient,
     nyaaSearchEngine: NyaaSearchEngine,
     animeAV1Client: AnimeAV1Client,
+    aniSkipClient: AniSkipClient? = null,
     onNavigateAnime: (AniListMedia) -> Unit,
     onBack: () -> Unit,
     initialTorrent: NyaaTorrent? = null,
@@ -146,6 +149,7 @@ fun EpisodeScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val isInPipMode = LocalPipController.current.isInPipMode
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
     val preferDub by watchHistoryManager.preferDub.collectAsState()
     val watchedEpisodesMap by watchHistoryManager.watchedEpisodes.collectAsState()
@@ -168,9 +172,9 @@ fun EpisodeScreen(
     var showEpisodeSheet by remember { mutableStateOf(false) }
     var showSubjectDetailsSheet by remember { mutableStateOf(false) }
 
-    // Enriquece detalles de AniList si la navegación vino desde "Continuar viendo" con modelo reducido
+    // Enriquece detalles de AniList si la navegación vino desde "Continuar viendo" con modelo reducido (incluye idMal para AniSkip)
     LaunchedEffect(initialAnime.id) {
-        if (initialAnime.id > 0 && (anime.description.isNullOrBlank() || anime.recommendations.isEmpty() || anime.studios.isEmpty())) {
+        if (initialAnime.id > 0 && (anime.description.isNullOrBlank() || anime.recommendations.isEmpty() || anime.studios.isEmpty() || anime.idMal == null)) {
             aniListClient.getAnimeDetails(initialAnime.id).onSuccess { details ->
                 anime = details
             }
@@ -330,6 +334,7 @@ fun EpisodeScreen(
                 initialPositionMillis = savedInitialPositionMillis,
                 animeForHistory = anime,
                 hasBothLanguages = hasBothLanguages,
+                aniSkipClient = aniSkipClient,
                 isFullscreen = isFullscreen,
                 onFullscreenChange = { isFullscreen = it },
                 maintainAspectRatio = params.maintainAspectRatio,
@@ -481,12 +486,12 @@ fun EpisodeScreen(
     val isWideScreen = currentWindowAdaptiveInfo1().isWidthAtLeastMedium
 
     when {
-        isFullscreen -> {
+        isInPipMode || isFullscreen -> {
             playerHost(
                 PlayerHostParams(
                     modifier = Modifier.fillMaxSize(),
                     maintainAspectRatio = false,
-                    insets = WindowInsets.displayCutout,
+                    insets = if (isInPipMode) WindowInsets(0) else WindowInsets.displayCutout,
                 ),
             )
         }
@@ -572,7 +577,7 @@ fun EpisodeScreen(
     }
 
     // Hoja inferior de selección de fuente (retrato / pantalla dividida)
-    if (!isFullscreen && showSourceSelector) {
+    if (!isFullscreen && !isInPipMode && showSourceSelector) {
         TorrentSelectionModal(
             anime = anime,
             episodeNumber = currentEpisode,
@@ -600,7 +605,7 @@ fun EpisodeScreen(
     }
 
     // Hoja inferior de cuadrícula completa de episodios (desde '>' de Lista de episodios)
-    if (!isFullscreen && showEpisodeSheet) {
+    if (!isFullscreen && !isInPipMode && showEpisodeSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = { showEpisodeSheet = false },
@@ -659,7 +664,7 @@ fun EpisodeScreen(
     }
 
     // Hoja inferior con la ficha completa del anime al pulsar el título (igual que Animeko onExpandSubject)
-    if (showSubjectDetailsSheet) {
+    if (!isInPipMode && showSubjectDetailsSheet) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val watchProgress = remember(watchHistory, anime.id) {
             watchHistory.firstOrNull { it.animeId == anime.id }

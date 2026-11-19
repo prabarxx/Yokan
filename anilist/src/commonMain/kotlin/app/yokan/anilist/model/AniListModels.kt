@@ -99,6 +99,7 @@ data class AniListMedia(
     val favourites: Int? = null,
     val studios: List<String> = emptyList(),
     val recommendations: List<AniListRelation> = emptyList(),
+    val idMal: Int? = null,
 ) {
     val displayScore: String
         get() = averageScore?.let { "$it%" } ?: "N/A"
@@ -182,3 +183,11 @@ data class AniListMedia(
 
     fun calculateAbsoluteEpisode(relativeEpisode: Int): Int = absoluteEpisodeOffset + relativeEpisode
 }
+
+@Serializable
+data class AniListAiringItem(
+    val scheduleId: Int,
+    val episode: Int,
+    val airingAt: Long,
+    val media: AniListMedia,
+)
