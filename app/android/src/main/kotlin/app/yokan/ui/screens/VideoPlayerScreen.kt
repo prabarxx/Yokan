@@ -537,26 +537,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Pausar cuando la actividad pasa a segundo plano sin PiP (ON_STOP no se dispara mientras PiP flota)
-    DisposableEffect(lifecycleOwner, exoPlayer, player) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                if (currentMediaData == null && exoPlayer != null) {
-                    if (exoPlayer.playWhenReady) {
-                        exoPlayer.playWhenReady = false
-                        exoPlayWhenReady = false
-                    }
-                } else if (player.state.value.playWhenReady) {
-                    runCatching { player.pause() }
-                }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
     // Sincroniza orientación horizontal / sistema bars exclusivamente con `effectiveFullscreen` (excepto en PiP)
     LaunchedEffect(effectiveFullscreen, isInPipMode, activity) {
         val act = activity ?: return@LaunchedEffect
@@ -652,6 +632,26 @@ fun VideoPlayerScreen(
 
     var exoPlayWhenReady by remember { mutableStateOf(true) }
     var exoIsBuffering by remember { mutableStateOf(false) }
+
+    // Pausar cuando la actividad pasa a segundo plano sin PiP (ON_STOP no se dispara mientras PiP flota)
+    DisposableEffect(lifecycleOwner, exoPlayer, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (currentMediaData == null && exoPlayer != null) {
+                    if (exoPlayer.playWhenReady) {
+                        exoPlayer.playWhenReady = false
+                        exoPlayWhenReady = false
+                    }
+                } else if (player.state.value.playWhenReady) {
+                    runCatching { player.pause() }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     val isEffectivelyPlaying by remember {
         derivedStateOf {

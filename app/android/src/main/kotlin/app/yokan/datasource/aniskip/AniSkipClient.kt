@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.utils.coroutines.runSuspendCatching
 import org.json.JSONObject
+import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.metadata.Chapter
 
 enum class SkipSegmentType(
@@ -49,6 +50,7 @@ data class SkipSegment(
     val isEnding: Boolean get() = type == SkipSegmentType.ENDING || type == SkipSegmentType.MIXED_ENDING
     val key: String get() = "${type.apiKey}:$startMillis:$endMillis"
 
+    @OptIn(InternalMediampApi::class)
     fun toChapter(): Chapter = Chapter(
         name = type.label,
         durationMillis = durationMillis,
