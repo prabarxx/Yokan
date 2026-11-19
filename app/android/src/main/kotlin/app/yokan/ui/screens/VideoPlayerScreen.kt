@@ -105,6 +105,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import app.yokan.datasource.animeav1.WebStreamSource
 import app.yokan.datasource.aniskip.AniSkipClient
 import app.yokan.datasource.aniskip.SkipSegment
+import app.yokan.datasource.aniskip.mergeSkipSegments
 import app.yokan.datasource.nyaa.EpisodeNumberMatcher
 import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
@@ -468,6 +469,7 @@ fun VideoPlayerScreen(
         val clamped = targetMs.coerceAtLeast(0L)
         if (currentMediaData == null && exoPlayer != null) {
             exoPlayer.seekTo(clamped)
+            exoPosition = clamped
         } else {
             player.seekTo(clamped)
         }
@@ -957,6 +959,9 @@ fun VideoPlayerScreen(
     LaunchedEffect(torrent?.magnetUrl, torrent?.torrentUrl) {
         val currentTorrent = torrent ?: return@LaunchedEffect
         activeWebStream = null
+        exoDuration = 0L
+        exoPosition = 0L
+        exoBufferedPosition = 0L
         runCatching { exoPlayer?.clearMediaItems() }
         currentMediaData?.let { prev ->
             currentMediaData = null
@@ -1154,24 +1159,53 @@ fun VideoPlayerScreen(
     val embeddedChaptersState = remember(player) {
         player.chapters ?: flowOf(emptyList())
     }.collectAsState(initial = emptyList())
+    val videoPropertiesState by player.mediaProperties.collectAsState(null)
     val playerPositionMs by player.currentPositionMillis.collectAsState()
+    val resolvedDurationMillis by remember(player) {
+        derivedStateOf {
+            if (exoDuration > 0L) exoDuration else (videoPropertiesState?.durationMillis ?: 0L)
+        }
+    }
+    // Agrupa la duración en intervalos de 2s para consultar AniSkip exactamente con el corte real
+    // de este video y re-consultar automáticamente si cambia la duración al cambiar servidor o SUB/LAT.
+    val aniSkipDurationBucket = if (resolvedDurationMillis >= 30_000L) {
+        (resolvedDurationMillis / 2_000L).toInt()
+    } else {
+        0
+    }
 
-    LaunchedEffect(aniSkipClient, animeForHistory?.idMal, episodeNumber) {
+    LaunchedEffect(aniSkipClient, animeForHistory?.idMal, episodeNumber, aniSkipDurationBucket) {
         aniSkipSegments = emptyList()
         autoSkippedKeys.clear()
         val client = aniSkipClient ?: return@LaunchedEffect
         val malId = animeForHistory?.idMal ?: return@LaunchedEffect
         val ep = episodeNumber ?: return@LaunchedEffect
-        if (malId > 0 && ep > 0) {
-            aniSkipSegments = client.getSkipSegments(malId, ep)
+        val durationMs = resolvedDurationMillis
+        if (malId > 0 && ep > 0 && aniSkipDurationBucket > 0 && durationMs >= 30_000L) {
+            aniSkipSegments = client.getSkipSegments(
+                malId = malId,
+                episodeNumber = ep,
+                episodeLengthMillis = durationMs,
+            )
+        }
+    }
+
+    val effectiveSkipSegments by remember(player) {
+        derivedStateOf {
+            mergeSkipSegments(
+                embeddedChapters = embeddedChaptersState.value,
+                aniSkipSegments = aniSkipSegments,
+                totalDurationMillis = resolvedDurationMillis,
+            )
         }
     }
 
     val activeSkipSegment by remember(player) {
         derivedStateOf {
+            if (resolvedDurationMillis <= 0L) return@derivedStateOf null
             val pos = if (exoPosition > 0L) exoPosition else playerPositionMs
             if (pos <= 0L) return@derivedStateOf null
-            aniSkipSegments.firstOrNull { seg ->
+            effectiveSkipSegments.firstOrNull { seg ->
                 pos >= seg.startMillis && pos < (seg.endMillis - 1_500L)
             }
         }
@@ -1179,8 +1213,8 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(activeSkipSegment?.key, appSettings.autoSkipIntro, appSettings.autoSkipOutro) {
         val seg = activeSkipSegment ?: return@LaunchedEffect
-        val shouldAutoSkip = (seg.isOpening && appSettings.autoSkipIntro) ||
-            (seg.isEnding && appSettings.autoSkipOutro)
+        val shouldAutoSkip = (seg.isAutoSkippableOpening && appSettings.autoSkipIntro) ||
+            (seg.isAutoSkippableEnding && appSettings.autoSkipOutro)
         if (shouldAutoSkip && autoSkippedKeys.add(seg.key)) {
             seekToEffective(seg.endMillis)
             Toast.makeText(context, "${seg.type.label} saltado", Toast.LENGTH_SHORT).show()
@@ -1200,7 +1234,7 @@ fun VideoPlayerScreen(
                 if (embedded.isNotEmpty()) {
                     embedded
                 } else {
-                    aniSkipSegments.map { it.toChapter() }
+                    effectiveSkipSegments.map { it.toChapter() }
                 }
             },
             onPreview = {},
@@ -1424,7 +1458,6 @@ fun VideoPlayerScreen(
                     )
                 },
                 gestureHost = {
-                    val videoPropertiesState by player.mediaProperties.collectAsState(null)
                     val swipeSeekerState = rememberSwipeSeekerState(
                         screenWidthPx = constraints.maxWidth,
                         swipeSeekerConfig = swipeSeekerConfig,
@@ -1613,16 +1646,32 @@ fun VideoPlayerScreen(
                                     }
 
                                     if (effectiveFullscreen) {
+                                        val activeSkip = activeSkipSegment
                                         val skipSeconds = appSettings.skipIntroSeconds
-                                        val skipIcon = when (skipSeconds) {
-                                            80 -> AniIcons.Forward80
-                                            85 -> AniIcons.Forward85
-                                            90 -> AniIcons.Forward90
-                                            else -> Icons.Rounded.FastForward
+                                        val skipIcon = if (activeSkip != null) {
+                                            Icons.Rounded.FastForward
+                                        } else {
+                                            when (skipSeconds) {
+                                                80 -> AniIcons.Forward80
+                                                85 -> AniIcons.Forward85
+                                                90 -> AniIcons.Forward90
+                                                else -> Icons.Rounded.FastForward
+                                            }
                                         }
                                         Surface(
-                                            onClick = { skipEffective(skipSeconds * 1_000L) },
-                                            color = Color.White.copy(alpha = 0.16f),
+                                            onClick = {
+                                                if (activeSkip != null) {
+                                                    autoSkippedKeys.add(activeSkip.key)
+                                                    seekToEffective(activeSkip.endMillis)
+                                                } else {
+                                                    skipEffective(skipSeconds * 1_000L)
+                                                }
+                                            },
+                                            color = if (activeSkip != null) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)
+                                            } else {
+                                                Color.White.copy(alpha = 0.16f)
+                                            },
                                             shape = RoundedCornerShape(50),
                                         ) {
                                             Row(
@@ -1632,12 +1681,12 @@ fun VideoPlayerScreen(
                                             ) {
                                                 Icon(
                                                     skipIcon,
-                                                    contentDescription = "Saltar intro (+${skipSeconds}s)",
+                                                    contentDescription = activeSkip?.type?.buttonLabel ?: "Adelantar +${skipSeconds}s",
                                                     tint = Color.White,
                                                     modifier = Modifier.size(18.dp),
                                                 )
                                                 Text(
-                                                    text = "Saltar intro",
+                                                    text = activeSkip?.type?.buttonLabel ?: "+${skipSeconds}s",
                                                     color = Color.White,
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.SemiBold,
