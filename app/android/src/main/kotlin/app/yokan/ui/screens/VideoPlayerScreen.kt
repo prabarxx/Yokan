@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package app.yokan.ui.screens
 
 import android.content.pm.ActivityInfo
@@ -36,7 +38,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -71,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +92,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoFrameProcessingException
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -96,6 +102,7 @@ import app.yokan.datasource.nyaa.NyaaTorrent
 import app.yokan.media.TorrentManager
 import app.yokan.media.TorrentMediaData
 import app.yokan.media.WatchHistoryManager
+import app.yokan.settings.YokanSettingsManager
 import app.yokan.anilist.model.AniListMedia
 import org.openani.mediamp.MediaStatus
 import me.him188.ani.app.videoplayer.ui.progress.PlayerProgressSliderState
@@ -103,12 +110,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import me.him188.ani.app.data.models.preference.DarkMode
+import me.him188.ani.app.data.models.preference.PlayerKernelConfig
 import me.him188.ani.app.domain.media.player.ChunkState
 import me.him188.ani.app.domain.media.player.MediaCacheProgressInfo
 import me.him188.ani.app.platform.features.StreamType
@@ -127,10 +137,13 @@ import me.him188.ani.app.ui.foundation.animation.LocalAniMotionScheme
 import me.him188.ani.app.ui.foundation.effects.DarkStatusBarAppearance
 import me.him188.ani.app.ui.foundation.effects.ScreenOnEffect
 import me.him188.ani.app.ui.foundation.icons.AniIcons
+import me.him188.ani.app.ui.foundation.icons.Forward80
 import me.him188.ani.app.ui.foundation.icons.Forward85
 import me.him188.ani.app.ui.foundation.icons.Forward90
 import me.him188.ani.app.ui.foundation.theme.AniTheme
 import me.him188.ani.app.videoplayer.media.LibassExoPlayerMediampPlayer
+import me.him188.ani.app.videoplayer.videoenhancement.VideoEnhancementMode
+import me.him188.ani.app.videoplayer.videoenhancement.createVideoEnhancementController
 import me.him188.ani.app.videoplayer.ui.ControllerVisibility
 import me.him188.ani.app.videoplayer.ui.PlaybackSpeedControllerState
 import me.him188.ani.app.videoplayer.ui.PlayerControllerState
@@ -173,6 +186,7 @@ import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.audioTracks
 import org.openani.mediamp.features.subtitleTracks
 import org.openani.mediamp.togglePlayWhenReady
+import kotlin.math.abs
 import kotlin.time.Duration.Companion.seconds
 
 private val logger = logger("VideoPlayerScreen")
@@ -255,6 +269,9 @@ fun VideoPlayerScreen(
     val activity = remember(context) { context.findActivity() }
 
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
+    val settingsManager = remember { YokanSettingsManager.getInstance(context) }
+    val appSettings by settingsManager.settings.collectAsState()
+    val currentAutoPlayNext by rememberUpdatedState(appSettings.autoPlayNextEpisode)
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var loadingStatus by remember { mutableStateOf<String?>(if (torrent != null || webStream != null) "Cargando..." else null) }
@@ -288,6 +305,26 @@ fun VideoPlayerScreen(
 
     val exoPlayer = remember(player) { (player as? LibassExoPlayerMediampPlayer)?.exoPlayer }
 
+    val videoEnhancementController = remember(player, playerCoroutineContext) {
+        runCatching {
+            createVideoEnhancementController(
+                player = player,
+                playerKernelConfig = flowOf(PlayerKernelConfig(exoPlayerInitEffectGraphInAdvance = true)),
+                parentCoroutineContext = playerCoroutineContext,
+            )?.also { controller ->
+                controller.setMode(settingsManager.settings.value.videoEnhancementMode)
+            }
+        }.onFailure { err ->
+            Log.w(LOG_TAG, "No se pudo inicializar VideoEnhancementController (Anime4K): ${err.message}", err)
+        }.getOrNull()
+    }
+    val fallbackEnhancementFlow = remember { MutableStateFlow(VideoEnhancementMode.OFF) }
+    val videoEnhancementMode by (videoEnhancementController?.mode ?: fallbackEnhancementFlow).collectAsState()
+
+    LaunchedEffect(videoEnhancementController, appSettings.videoEnhancementMode) {
+        videoEnhancementController?.setMode(appSettings.videoEnhancementMode)
+    }
+
     // --- Fallback automático entre servidores web ---
     var activeWebStream by remember { mutableStateOf(webStream) }
     var lastHandledSelectionVersion by remember { mutableIntStateOf(sourceSelectionVersion) }
@@ -300,15 +337,24 @@ fun VideoPlayerScreen(
     val currentToggleLanguage by rememberUpdatedState(onToggleAudioLanguage)
     val currentOnActiveStreamResolved by rememberUpdatedState(onActiveStreamResolved)
 
-    // Sincroniza cambios externos de webStream/torrent (incluyendo re-seleccionar la misma fuente para reintentar)
+    // Sincroniza cambios externos de webStream/torrent (incluyendo re-seleccionar la misma fuente o cambiar SUB/LAT)
     LaunchedEffect(webStream?.streamUrl, torrent?.magnetUrl, torrent?.torrentUrl, sourceSelectionVersion) {
         val selectionChanged = sourceSelectionVersion != lastHandledSelectionVersion
         lastHandledSelectionVersion = sourceSelectionVersion
         if (torrent == null && webStream != null && (webStream.streamUrl != activeWebStream?.streamUrl || selectionChanged)) {
-            Log.i(LOG_TAG, "Nueva fuente web seleccionada: ${webStream.serverName} (selectionChanged=$selectionChanged)")
+            val isLanguageSwitch = activeWebStream != null && activeWebStream?.isDub != webStream.isDub
+            if (isLanguageSwitch) {
+                val pos = exoPlayer?.currentPosition ?: 0L
+                if (pos > 2_000L) resumeAfterFallbackMs = pos
+            }
+            Log.i(LOG_TAG, "Nueva fuente web seleccionada: ${webStream.serverName} (selectionChanged=$selectionChanged, langSwitch=$isLanguageSwitch)")
             triedWebServers.clear()
             errorMessage = null
-            loadingStatus = "Cargando..."
+            loadingStatus = if (isLanguageSwitch) {
+                if (webStream.isDub) "Cambiando a Español Latino..." else "Cambiando a Subtitulado..."
+            } else {
+                "Cargando..."
+            }
             activeWebStream = webStream
             webReloadNonce++
         }
@@ -439,7 +485,7 @@ fun VideoPlayerScreen(
                 durationMillis = dur,
             )
         }
-        if (currentOnNextEpisode != null && errorMessage == null) {
+        if (currentOnNextEpisode != null && errorMessage == null && currentAutoPlayNext) {
             nextEpisodeCountdown = AUTO_NEXT_SECONDS
         }
     }
@@ -536,6 +582,7 @@ fun VideoPlayerScreen(
                     )
                 }
             }
+            runCatching { videoEnhancementController?.close() }
             runCatching { player.close() }
             runCatching { currentMediaData?.close() }
         }
@@ -590,6 +637,32 @@ fun VideoPlayerScreen(
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(LOG_TAG, "ExoPlayer error code=${error.errorCode} server=${activeWebStream?.serverName}: ${error.message}", error)
                 logger.error("ExoPlayer error: ${error.message} (code=${error.errorCode})", error)
+                if (videoEnhancementController != null &&
+                    videoEnhancementController.mode.value != VideoEnhancementMode.OFF &&
+                    isVideoFrameProcessingError(error)
+                ) {
+                    Log.w(LOG_TAG, "Fallo GPU/shader en Anime4K; desactivando mejora de video y reintentando", error)
+                    videoEnhancementController.setMode(VideoEnhancementMode.OFF)
+                    settingsManager.setVideoEnhancementMode(VideoEnhancementMode.OFF)
+                    val pos = exoPlayer.currentPosition
+                    if (pos > 2_000L) resumeAfterFallbackMs = pos
+                    Toast.makeText(
+                        context,
+                        "Anime4K no es compatible con este dispositivo; se desactivó automáticamente.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    errorMessage = null
+                    loadingStatus = "Cargando..."
+                    if (activeWebStream != null) {
+                        webReloadNonce++
+                    } else {
+                        runCatching {
+                            exoPlayer.prepare()
+                            exoPlayer.playWhenReady = true
+                        }
+                    }
+                    return
+                }
                 if (activeWebStream != null && switchToNextWebSource("error ${error.errorCode}")) return
                 errorMessage = "Error de reproducción: ${error.localizedMessage ?: error.message}"
                 loadingStatus = null
@@ -678,7 +751,7 @@ fun VideoPlayerScreen(
                 val currentPos = effectivePositionMillis()
                 val effectiveDur = effectiveDurationMillis()
                 if (animeForHistory != null && episodeNumber != null && effectiveDur > 0L &&
-                    currentPos > 10_000L && (currentPos - lastSavedPositionMs > 5_000L)) {
+                    currentPos > 10_000L && abs(currentPos - lastSavedPositionMs) > 5_000L) {
                     lastSavedPositionMs = currentPos
                     watchHistoryManager.saveProgress(
                         animeId = animeForHistory.id,
@@ -1220,7 +1293,13 @@ fun VideoPlayerScreen(
                 video = {
                     VideoPlayer(
                         player = player,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onSizeChanged { size ->
+                                if (size.width > 0 && size.height > 0) {
+                                    videoEnhancementController?.setViewportSize(size.width, size.height)
+                                }
+                            },
                     )
                 },
                 gestureHost = {
@@ -1384,9 +1463,43 @@ fun VideoPlayerScreen(
                                         }
                                     }
 
-                                    if (effectiveFullscreen) {
+                                    if (effectiveFullscreen && videoEnhancementMode != VideoEnhancementMode.OFF) {
                                         Surface(
-                                            onClick = { skipEffective(85_000L) },
+                                            onClick = { showSettingsSheet = true },
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                                            shape = RoundedCornerShape(50),
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.AutoAwesome,
+                                                    contentDescription = "Anime4K activo",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                                Text(
+                                                    text = if (videoEnhancementMode == VideoEnhancementMode.QUALITY) "4K+" else "4K",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    if (effectiveFullscreen) {
+                                        val skipSeconds = appSettings.skipIntroSeconds
+                                        val skipIcon = when (skipSeconds) {
+                                            80 -> AniIcons.Forward80
+                                            85 -> AniIcons.Forward85
+                                            90 -> AniIcons.Forward90
+                                            else -> Icons.Rounded.FastForward
+                                        }
+                                        Surface(
+                                            onClick = { skipEffective(skipSeconds * 1_000L) },
                                             color = Color.White.copy(alpha = 0.16f),
                                             shape = RoundedCornerShape(50),
                                         ) {
@@ -1396,8 +1509,8 @@ fun VideoPlayerScreen(
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             ) {
                                                 Icon(
-                                                    AniIcons.Forward85,
-                                                    contentDescription = "Saltar intro (+85s)",
+                                                    skipIcon,
+                                                    contentDescription = "Saltar intro (+${skipSeconds}s)",
                                                     tint = Color.White,
                                                     modifier = Modifier.size(18.dp),
                                                 )
@@ -1424,11 +1537,16 @@ fun VideoPlayerScreen(
                 },
             )
 
-            // Panel compacto de ajustes del reproductor (Velocidad, Pantalla, Pistas, Estadísticas)
+            // Panel compacto de ajustes del reproductor (Velocidad, Pantalla, Anime4K, Pistas, Estadísticas)
             if (showSettingsSheet) {
                 PlayerSettingsOverlay(
                     playbackSpeedControllerState = playbackSpeedControllerState,
                     videoAspectRatioControllerState = videoAspectRatioControllerState,
+                    videoEnhancementMode = if (videoEnhancementController != null) videoEnhancementMode else null,
+                    onSelectVideoEnhancementMode = { mode ->
+                        videoEnhancementController?.setMode(mode)
+                        settingsManager.setVideoEnhancementMode(mode)
+                    },
                     onApplyExoSpeed = { speed -> exoPlayer?.setPlaybackSpeed(speed) },
                     audioTracksContent = {
                         player.audioTracks?.let {
@@ -1572,6 +1690,8 @@ private val SPEED_PRESETS = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 private fun PlayerSettingsOverlay(
     playbackSpeedControllerState: PlaybackSpeedControllerState?,
     videoAspectRatioControllerState: VideoAspectRatioControllerState?,
+    videoEnhancementMode: VideoEnhancementMode?,
+    onSelectVideoEnhancementMode: (VideoEnhancementMode) -> Unit,
     onApplyExoSpeed: (Float) -> Unit,
     audioTracksContent: @Composable () -> Unit,
     subtitleTracksContent: @Composable () -> Unit,
@@ -1721,6 +1841,57 @@ private fun PlayerSettingsOverlay(
                     }
                 }
 
+                if (videoEnhancementMode != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Text(
+                                text = "Mejora de video (Anime4K)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White.copy(alpha = 0.7f),
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(
+                                VideoEnhancementMode.OFF to "Off",
+                                VideoEnhancementMode.PERFORMANCE to "Rendimiento",
+                                VideoEnhancementMode.QUALITY to "Calidad",
+                            ).forEach { (mode, label) ->
+                                val selected = videoEnhancementMode == mode
+                                Surface(
+                                    onClick = { onSelectVideoEnhancementMode(mode) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        Color.White.copy(alpha = 0.08f)
+                                    },
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            Color.White.copy(alpha = 0.9f)
+                                        },
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1785,4 +1956,18 @@ private fun findMatchingEpisodeFile(
         if (matched != null) return matched
     }
     return null
+}
+
+private fun isVideoFrameProcessingError(error: PlaybackException): Boolean {
+    if (error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED ||
+        error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED
+    ) {
+        return true
+    }
+    var cause: Throwable? = error
+    while (cause != null) {
+        if (cause is VideoFrameProcessingException) return true
+        cause = cause.cause
+    }
+    return false
 }

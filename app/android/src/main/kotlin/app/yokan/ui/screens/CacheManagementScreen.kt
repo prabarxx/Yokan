@@ -1,6 +1,5 @@
 package app.yokan.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -40,7 +38,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -64,6 +61,9 @@ import app.yokan.media.CachedTorrentItem
 import app.yokan.media.TorrentManager
 import app.yokan.media.formatBytes
 import kotlinx.coroutines.launch
+import me.him188.ani.app.ui.adaptive.AniTopAppBar
+import me.him188.ani.app.ui.foundation.LocalSketch
+import me.him188.ani.app.ui.foundation.theme.appChromeHazeSource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,6 +72,7 @@ fun CacheManagementScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val sketch = LocalSketch.current
     val coroutineScope = rememberCoroutineScope()
     val cacheManager = remember { CacheStorageManager.getInstance(context) }
     val torrentManager = remember { TorrentManager.getInstance(context) }
@@ -90,20 +91,13 @@ fun CacheManagementScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(
+            AniTopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            text = "Caché",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = "Gestión de almacenamiento y descargas",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        text = "Caché",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                    )
                 },
                 actions = {
                     IconButton(onClick = { cacheManager.refreshStorageInfo() }) {
@@ -119,6 +113,7 @@ fun CacheManagementScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
+                .appChromeHazeSource(MaterialTheme.colorScheme.background)
                 .padding(padding),
             contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -216,7 +211,13 @@ fun CacheManagementScreen(
                 Button(
                     onClick = {
                         coroutineScope.launch {
-                            cacheManager.clearAllCache()
+                            cacheManager.clearAllCache(
+                                onClearImageCache = {
+                                    runCatching { sketch?.memoryCache?.clear() }
+                                    runCatching { sketch?.downloadCache?.clear() }
+                                    runCatching { sketch?.resultCache?.clear() }
+                                },
+                            )
                             showClearAllDialog = false
                         }
                     },
@@ -257,7 +258,7 @@ private fun StorageSummaryCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             LinearProgressIndicator(
-                progress = storageInfo.progress,
+                progress = { storageInfo.progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(8.dp)
@@ -280,6 +281,11 @@ private fun StorageSummaryCard(
                         text = storageInfo.usedFormatted,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Torrents ${storageInfo.torrentUsedFormatted} · Imágenes ${storageInfo.imageUsedFormatted}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Column(horizontalAlignment = Alignment.End) {

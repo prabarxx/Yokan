@@ -1,6 +1,7 @@
 package app.yokan.ui.screens
 
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
@@ -144,6 +145,7 @@ fun EpisodeScreen(
     initialWebStream: WebStreamSource? = null,
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val watchHistoryManager = remember { WatchHistoryManager.getInstance(context) }
     val preferDub by watchHistoryManager.preferDub.collectAsState()
     val watchedEpisodesMap by watchHistoryManager.watchedEpisodes.collectAsState()
@@ -158,6 +160,7 @@ fun EpisodeScreen(
     var activeTorrent by remember { mutableStateOf<NyaaTorrent?>(initialTorrent) }
     var sourceSelectionVersion by remember { mutableIntStateOf(0) }
     var isAutoResolving by remember { mutableStateOf(initialWebStream == null && initialTorrent == null) }
+    var isSwitchingLanguage by remember { mutableStateOf(false) }
     var manualSelectionNotice by remember { mutableStateOf<String?>(null) }
     var hasBothLanguages by remember { mutableStateOf(false) }
 
@@ -240,6 +243,39 @@ fun EpisodeScreen(
         manualSelectionNotice = null
         isAutoResolving = true
         currentEpisode = ep
+    }
+
+    fun switchAudioLanguage(targetDub: Boolean) {
+        watchHistoryManager.setPreferDub(targetDub)
+        val currentStream = activeWebStream
+        if (currentStream == null || currentStream.isDub == targetDub || isSwitchingLanguage) {
+            return
+        }
+        isSwitchingLanguage = true
+        coroutineScope.launch {
+            val resolved = withTimeoutOrNull(EPISODE_AUTO_RESOLVE_TIMEOUT_MS) {
+                animeAV1Client.resolveBestStream(
+                    romajiTitle = anime.title.romaji,
+                    englishTitle = anime.title.english,
+                    episodeNumber = currentEpisode,
+                    preferDub = targetDub,
+                ).getOrNull()
+            }
+            isSwitchingLanguage = false
+            if (resolved != null && resolved.isDub == targetDub) {
+                activeTorrent = null
+                activeWebStream = resolved
+                sourceSelectionVersion++
+                manualSelectionNotice = null
+            } else {
+                val label = if (targetDub) "Español Latino" else "Subtitulado"
+                Toast.makeText(
+                    context,
+                    "No hay servidores disponibles en $label para este episodio.",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
     }
 
     val totalEpisodes = anime.effectiveEpisodesCount
@@ -484,7 +520,7 @@ fun EpisodeScreen(
                         onOpenEpisodeGrid = { showEpisodeSheet = true },
                         onSelectEpisode = { selectEpisode(it) },
                         onToggleEpisodeWatched = { ep -> watchHistoryManager.toggleEpisodeWatched(anime.id, ep) },
-                        onTogglePreferDub = { watchHistoryManager.setPreferDub(it) },
+                        onTogglePreferDub = { switchAudioLanguage(it) },
                         onNavigateAnime = onNavigateAnime,
                         modifier = Modifier
                             .width(sidebarWidth)
@@ -525,7 +561,7 @@ fun EpisodeScreen(
                     onOpenEpisodeGrid = { showEpisodeSheet = true },
                     onSelectEpisode = { selectEpisode(it) },
                     onToggleEpisodeWatched = { ep -> watchHistoryManager.toggleEpisodeWatched(anime.id, ep) },
-                    onTogglePreferDub = { watchHistoryManager.setPreferDub(it) },
+                    onTogglePreferDub = { switchAudioLanguage(it) },
                     onNavigateAnime = onNavigateAnime,
                     modifier = Modifier
                         .weight(1f)
@@ -648,7 +684,7 @@ fun EpisodeScreen(
                     watchedEpisodes = watchedEpisodes,
                     preferDub = preferDub,
                     hasDubAvailable = hasBothLanguages,
-                    onTogglePreferDub = { watchHistoryManager.setPreferDub(it) },
+                    onTogglePreferDub = { switchAudioLanguage(it) },
                     onToggleEpisodeWatched = { ep -> watchHistoryManager.toggleEpisodeWatched(anime.id, ep) },
                     onEpisodeClick = { ep ->
                         showSubjectDetailsSheet = false

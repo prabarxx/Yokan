@@ -1,8 +1,11 @@
 package app.yokan.media
 
 import android.content.Context
+import app.yokan.settings.YokanSettingsManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.him188.ani.app.torrent.anitorrent.AnitorrentDownloaderFactory
 import me.him188.ani.app.torrent.anitorrent.AnitorrentTorrentDownloader
@@ -35,6 +38,7 @@ val FAST_PUBLIC_TRACKERS = listOf(
 class TorrentManager private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val factory = AnitorrentDownloaderFactory()
+    private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @Volatile
     private var isDownloaderInitialized = false
@@ -43,6 +47,7 @@ class TorrentManager private constructor(context: Context) {
         logger.info("Loading Anitorrent native libraries...")
         factory.libraryLoader.loadLibraries()
         val torrentDir = appContext.cacheDir.resolve("torrents").apply { mkdirs() }
+        val initialSettings = YokanSettingsManager.getInstance(appContext).settings.value
         logger.info("Initializing Anitorrent downloader at: ${torrentDir.absolutePath}")
         factory.createDownloader(
             rootDataDirectory = torrentDir.toKtPath().inSystem,
@@ -64,12 +69,32 @@ class TorrentManager private constructor(context: Context) {
             },
             torrentDownloaderConfig = TorrentDownloaderConfig(
                 extraTrackers = FAST_PUBLIC_TRACKERS,
-                downloadRateLimitBytes = 0,
-                uploadRateLimitBytes = 0,
+                downloadRateLimitBytes = initialSettings.torrentDownloadLimitBytes.coerceAtLeast(0),
+                uploadRateLimitBytes = initialSettings.torrentUploadLimitBytes.coerceAtLeast(0),
             ),
             parentCoroutineContext = Dispatchers.IO + SupervisorJob(),
         ).also {
             isDownloaderInitialized = true
+        }
+    }
+
+    /**
+     * Aplica en caliente nuevos límites de descarga/subida al motor libtorrent si ya fue inicializado.
+     */
+    fun updateRateLimits(downloadRateLimitBytes: Int, uploadRateLimitBytes: Int) {
+        if (!isDownloaderInitialized) return
+        ioScope.launch {
+            runCatching {
+                downloader.applyConfig(
+                    TorrentDownloaderConfig(
+                        extraTrackers = FAST_PUBLIC_TRACKERS,
+                        downloadRateLimitBytes = downloadRateLimitBytes.coerceAtLeast(0),
+                        uploadRateLimitBytes = uploadRateLimitBytes.coerceAtLeast(0),
+                    ),
+                )
+            }.onFailure {
+                logger.warn("Error applying torrent rate limits: ${it.message}")
+            }
         }
     }
 

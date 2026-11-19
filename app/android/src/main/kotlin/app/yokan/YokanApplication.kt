@@ -6,6 +6,7 @@ import app.yokan.datasource.animeav1.AnimeAV1Client
 import app.yokan.datasource.nyaa.NyaaSearchEngine
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
@@ -22,6 +23,11 @@ class YokanApplication : Application() {
         val yokanModule = module {
             single {
                 HttpClient(OkHttp) {
+                    install(HttpTimeout) {
+                        connectTimeoutMillis = 12_000
+                        socketTimeoutMillis = 20_000
+                        requestTimeoutMillis = 25_000
+                    }
                     install(ContentNegotiation) {
                         json(Json {
                             ignoreUnknownKeys = true

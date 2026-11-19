@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -36,6 +37,7 @@ import app.yokan.ui.screens.AnimeDetailsScreen
 import app.yokan.ui.screens.CacheManagementScreen
 import app.yokan.ui.screens.EpisodeScreen
 import app.yokan.ui.screens.HomeScreen
+import app.yokan.ui.screens.SettingsScreen
 import app.yokan.ui.screens.VideoPlayerScreen
 import app.yokan.ui.state.HomeCache
 import io.ktor.client.HttpClient
@@ -85,6 +87,7 @@ class MainActivity : ComponentActivity() {
 private sealed interface Screen {
     data object Home : Screen
     data object Cache : Screen
+    data object Settings : Screen
     data class Details(val anime: AniListMedia, val previousScreen: Screen? = null) : Screen
     data class Episode(
         val anime: AniListMedia,
@@ -129,6 +132,10 @@ private fun YokanApp(
                 }
             }
             is Screen.Cache -> {
+                selectedNavTab = 0
+                currentScreen = Screen.Home
+            }
+            is Screen.Settings -> {
                 selectedNavTab = 0
                 currentScreen = Screen.Home
             }
@@ -202,7 +209,7 @@ private fun YokanApp(
                 }
             }
 
-            is Screen.Home, is Screen.Cache -> {
+            is Screen.Home, is Screen.Cache, is Screen.Settings -> {
                 AniNavigationSuiteLayout(
                     navigationSuite = {
                         AniNavigationSuite {
@@ -234,6 +241,15 @@ private fun YokanApp(
                                 },
                                 icon = { Icon(Icons.Rounded.DownloadDone, contentDescription = "Caché") },
                                 label = { Text("Caché") },
+                            )
+                            item(
+                                selected = selectedNavTab == 3 && currentScreen is Screen.Settings,
+                                onClick = {
+                                    selectedNavTab = 3
+                                    currentScreen = Screen.Settings
+                                },
+                                icon = { Icon(Icons.Rounded.Settings, contentDescription = "Ajustes") },
+                                label = { Text("Ajustes") },
                             )
                         }
                     }
@@ -268,6 +284,10 @@ private fun YokanApp(
                                     )
                                 }
                             )
+                        }
+
+                        is Screen.Settings -> {
+                            SettingsScreen()
                         }
 
                         else -> Unit

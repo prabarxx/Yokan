@@ -2,6 +2,7 @@ package app.yokan.media
 
 import android.content.Context
 import android.os.StatFs
+import android.util.Log
 import app.yokan.datasource.nyaa.NyaaTorrent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,16 +12,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import me.him188.ani.utils.logging.logger
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 import kotlin.math.log10
 import kotlin.math.pow
 
-@Serializable
 data class CachedTorrentItem(
     val id: String,
     val title: String,
@@ -45,20 +43,47 @@ data class CachedTorrentItem(
             infoHash = id,
         )
     }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("title", title)
+        put("magnetUrl", magnetUrl)
+        put("torrentUrl", torrentUrl)
+        put("fileSizeBytes", fileSizeBytes)
+        put("addedTimeMillis", addedTimeMillis)
+        put("saveDirPath", saveDirPath)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject): CachedTorrentItem = CachedTorrentItem(
+            id = o.optString("id", ""),
+            title = o.optString("title", ""),
+            magnetUrl = o.optString("magnetUrl", ""),
+            torrentUrl = o.optString("torrentUrl", ""),
+            fileSizeBytes = o.optLong("fileSizeBytes", 0L),
+            addedTimeMillis = o.optLong("addedTimeMillis", System.currentTimeMillis()),
+            saveDirPath = o.optString("saveDirPath", ""),
+        )
+    }
 }
 
 data class StorageInfo(
     val cacheUsedBytes: Long,
     val deviceFreeBytes: Long,
     val deviceTotalBytes: Long,
+    val torrentCacheBytes: Long = cacheUsedBytes,
+    val imageCacheBytes: Long = 0L,
 ) {
     val usedFormatted: String get() = formatBytes(cacheUsedBytes)
+    val torrentUsedFormatted: String get() = formatBytes(torrentCacheBytes)
+    val imageUsedFormatted: String get() = formatBytes(imageCacheBytes)
     val freeFormatted: String get() = formatBytes(deviceFreeBytes)
     val totalFormatted: String get() = formatBytes(deviceTotalBytes)
     val progress: Float
-        get() = if (deviceTotalBytes > 0) {
-            (cacheUsedBytes.toFloat() / deviceTotalBytes.toFloat()).coerceIn(0.01f, 1f)
-        } else 0f
+        get() = when {
+            deviceTotalBytes <= 0L || cacheUsedBytes <= 0L -> 0f
+            else -> (cacheUsedBytes.toFloat() / deviceTotalBytes.toFloat()).coerceIn(0.01f, 1f)
+        }
 }
 
 fun formatBytes(bytes: Long): String {
@@ -73,7 +98,6 @@ class CacheStorageManager private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val prefs = appContext.getSharedPreferences("yokan_cache_storage", Context.MODE_PRIVATE)
-    private val json = Json { ignoreUnknownKeys = true }
 
     private val _cachedTorrents = MutableStateFlow<List<CachedTorrentItem>>(emptyList())
     val cachedTorrents: StateFlow<List<CachedTorrentItem>> = _cachedTorrents.asStateFlow()
@@ -91,10 +115,14 @@ class CacheStorageManager private constructor(context: Context) {
     private fun loadCachedTorrents() {
         val rawJson = prefs.getString(PREF_KEY_ITEMS, null) ?: return
         runCatching {
-            val list = json.decodeFromString<List<CachedTorrentItem>>(rawJson)
+            val arr = JSONArray(rawJson)
+            val list = (0 until arr.length()).mapNotNull { idx ->
+                val obj = arr.optJSONObject(idx) ?: return@mapNotNull null
+                CachedTorrentItem.fromJson(obj).takeIf { it.id.isNotBlank() || it.magnetUrl.isNotBlank() }
+            }
             _cachedTorrents.value = list.sortedByDescending { it.addedTimeMillis }
         }.onFailure {
-            logger.error("Failed to load cached torrents", it)
+            Log.e(TAG, "Failed to load cached torrents", it)
         }
     }
 
@@ -102,10 +130,11 @@ class CacheStorageManager private constructor(context: Context) {
         _cachedTorrents.value = items
         scope.launch {
             runCatching {
-                val encoded = json.encodeToString(items)
-                prefs.edit().putString(PREF_KEY_ITEMS, encoded).apply()
+                val arr = JSONArray()
+                items.forEach { arr.put(it.toJson()) }
+                prefs.edit().putString(PREF_KEY_ITEMS, arr.toString()).apply()
             }.onFailure {
-                logger.error("Failed to save cached torrents", it)
+                Log.e(TAG, "Failed to save cached torrents", it)
             }
         }
     }
@@ -155,7 +184,10 @@ class CacheStorageManager private constructor(context: Context) {
         scope.launch {
             val cacheDir = appContext.cacheDir
             val torrentDir = cacheDir.resolve("torrents")
-            val usedBytes = calculateDirSize(torrentDir)
+            val imageDir = cacheDir.resolve("image-cache")
+            val torrentBytes = calculateDirSize(torrentDir)
+            val imageBytes = calculateDirSize(imageDir)
+            val usedBytes = torrentBytes + imageBytes
             val stat = runCatching { StatFs(cacheDir.path) }.getOrNull()
             val freeBytes = stat?.let { it.availableBlocksLong * it.blockSizeLong } ?: 0L
             val totalBytes = stat?.let { it.blockCountLong * it.blockSizeLong } ?: 0L
@@ -163,6 +195,8 @@ class CacheStorageManager private constructor(context: Context) {
                 cacheUsedBytes = usedBytes,
                 deviceFreeBytes = freeBytes,
                 deviceTotalBytes = totalBytes,
+                torrentCacheBytes = torrentBytes,
+                imageCacheBytes = imageBytes,
             )
         }
     }
@@ -194,7 +228,7 @@ class CacheStorageManager private constructor(context: Context) {
         if (exactPieceDir.exists() && exactPieceDir.canonicalPath.startsWith(torrentDir.canonicalPath)) {
             torrentManager.closeSessionByKey(exactPieceDir.name)
             runCatching { exactPieceDir.deleteRecursively() }
-                .onFailure { logger.error("Failed to delete piece directory: ${exactPieceDir.path}", it) }
+                .onFailure { Log.e(TAG, "Failed to delete piece directory: ${exactPieceDir.path}", it) }
         }
 
         // Eliminar también el archivo .torrent cacheado por HTTP si existe
@@ -209,17 +243,17 @@ class CacheStorageManager private constructor(context: Context) {
         refreshStorageInfo()
     }
 
-    suspend fun clearAllCache() = withContext(Dispatchers.IO) {
+    suspend fun clearAllCache(onClearImageCache: (() -> Unit)? = null) = withContext(Dispatchers.IO) {
         saveCachedTorrents(emptyList())
 
         // 1. Cerrar todas las sesiones activas de torrent antes de borrar sus archivos
         runCatching {
             TorrentManager.getInstance(appContext).closeAllSessions()
         }.onFailure {
-            logger.error("Failed to close active torrent sessions before clearing cache", it)
+            Log.e(TAG, "Failed to close active torrent sessions before clearing cache", it)
         }
 
-        // 2. Borrar únicamente el directorio propio de torrents (pieces y torrentFiles), no todo cacheDir
+        // 2. Borrar el directorio propio de torrents (pieces y torrentFiles)
         runCatching {
             val torrentDir = appContext.cacheDir.resolve("torrents")
             if (torrentDir.exists()) {
@@ -228,13 +262,30 @@ class CacheStorageManager private constructor(context: Context) {
                 }
             }
         }.onFailure {
-            logger.error("Failed to clear torrent cache directory", it)
+            Log.e(TAG, "Failed to clear torrent cache directory", it)
+        }
+
+        // 3. Limpiar la caché de imágenes de Sketch (memoria + disco)
+        runCatching {
+            onClearImageCache?.invoke()
+        }.onFailure {
+            Log.e(TAG, "Failed to clear Sketch image cache via callback", it)
+        }
+        runCatching {
+            val imageDir = appContext.cacheDir.resolve("image-cache")
+            if (imageDir.exists()) {
+                imageDir.listFiles()?.forEach { child ->
+                    child.deleteRecursively()
+                }
+            }
+        }.onFailure {
+            Log.e(TAG, "Failed to clear image cache directory", it)
         }
         refreshStorageInfo()
     }
 
     companion object {
-        private val logger = logger<CacheStorageManager>()
+        private const val TAG = "YokanCache"
         private const val PREF_KEY_ITEMS = "cached_torrent_items"
         private val BTIH_REGEX = Regex("""xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})""")
 
